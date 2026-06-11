@@ -178,7 +178,7 @@ def load_sentiment():
             funding = float(df_f["funding_rate"].iloc[-1])
 
     if os.path.exists(FG_CSV):
-        df_g = pd.read_csv(FG_CSV, parse_dates=["date"], index_col="date")
+        df_g = pd.read_csv(FG_CSV, index_col=0)
         df_g.sort_index(inplace=True)
         if not df_g.empty:
             fg = float(df_g["fg_value"].iloc[-1])

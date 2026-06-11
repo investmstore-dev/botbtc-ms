@@ -85,11 +85,12 @@ def _refresh_sentiment():
 
         fg_path = config.FG_CSV
         if os.path.exists(fg_path):
-            old_fg = pd.read_csv(fg_path, parse_dates=["date"], index_col="date")
+            old_fg = pd.read_csv(fg_path, index_col=0)
             old_fg.index = pd.to_datetime(old_fg.index).date
             fg_rows = pd.concat([old_fg, fg_rows])
             fg_rows = fg_rows[~fg_rows.index.duplicated(keep="last")]
             fg_rows.sort_index(inplace=True)
+        fg_rows.index.name = "date"
         fg_rows.to_csv(fg_path)
 
         _last_sentiment_update = time.time()
