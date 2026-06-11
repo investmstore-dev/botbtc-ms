@@ -2,6 +2,7 @@
 Bot BTC -- Mining Store
 Estrategia: ORB + MACD/RSI + Supertrend H4 + Choppiness Index | BTCUSD H1
 Cuenta: Crypto Fund Trader | v5b
+Broker: Bybit API directa (sin MT5)
 """
 import time
 import logging
@@ -18,13 +19,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 import config
-import mt5_connector as mt5
+import bybit_connector as bybit
 import state_manager as sm
 from strategy import (compute_indicators, check_entry,
                       get_risk_pct, calc_lot_size, calc_sl_tp, calc_trailing_sl)
 
 INITIAL_BALANCE = 10_000
-LOOP_INTERVAL   = 60          # segundos entre ciclos
+LOOP_INTERVAL   = 60
 active_trade    = None
 peak_equity     = INITIAL_BALANCE
 
@@ -36,15 +37,19 @@ def run():
     logger.info("  BOT BTC -- Mining Store | Crypto Fund Trader v5b")
     logger.info("  Estrategia: ORB + Supertrend H4 + Choppiness + Sentimiento")
     logger.info("  RISK: TREND=1.8%% | NEUTRAL=1.0%% | CHOPPY=0.5%%")
+    logger.info("  Broker: Bybit %s", "DEMO" if bybit.IS_DEMO else "LIVE")
     logger.info("=" * 60)
 
-    if not mt5.connect():
-        logger.error("No se pudo conectar al EA Bridge. Abortando.")
+    # Verificar conexion con Bybit
+    account = bybit.get_account()
+    if not account:
+        logger.error("No se pudo conectar con Bybit. Verificar .env y API Key.")
         return
 
-    account = mt5.get_account()
-    logger.info("Cuenta: login=%s  balance=$%.2f",
-                account.get("login"), account.get("balance", 0))
+    logger.info("Cuenta: %s  balance=$%.2f  equity=$%.2f",
+                account.get("login"), account.get("balance", 0), account.get("equity", 0))
+
+    peak_equity = account.get("equity", INITIAL_BALANCE)
 
     while True:
         try:
@@ -61,9 +66,9 @@ def run():
 def _cycle():
     global active_trade, peak_equity
 
-    account = mt5.get_account()
+    account = bybit.get_account()
     if not account:
-        logger.warning("Sin datos de cuenta -- MT5 EA no responde.")
+        logger.warning("Sin respuesta de Bybit API. Reintentando en el proximo ciclo.")
         return
 
     balance = account.get("balance", INITIAL_BALANCE)
@@ -72,12 +77,10 @@ def _cycle():
 
     sm.append_equity(equity, balance)
 
-    cft = sm.calc_cft_status(account, INITIAL_BALANCE)
-
-    # Drawdown actual sobre el peak (para ajuste de riesgo)
+    cft    = sm.calc_cft_status(account, INITIAL_BALANCE)
     dd_pct = abs((equity - peak_equity) / peak_equity) if peak_equity > 0 else 0.0
 
-    # Guardia: drawdown maximo CFT
+    # Guardas CFT
     if cft["dd_violated"]:
         logger.error("DRAWDOWN MAXIMO VIOLADO (%.2f%%). Cerrando posiciones.", cft["max_dd_pct"])
         _close_all()
@@ -96,40 +99,38 @@ def _cycle():
         sm.save_state(account, "TARGET_REACHED", active_trade, cft)
         return
 
-    # Obtener velas H1
-    df = mt5.get_candles(config.SYMBOL, config.TIMEFRAME, count=400)
+    # Velas H1
+    df = bybit.get_candles(config.SYMBOL, config.TIMEFRAME, count=400)
     if df is None or len(df) < 150:
-        logger.warning("Datos insuficientes (%d velas). Esperando.",
-                       len(df) if df is not None else 0)
+        logger.warning("Datos insuficientes (%d velas).", len(df) if df is not None else 0)
         return
 
     df = compute_indicators(df)
     curr = df.iloc[-1]
 
-    # Gestion de posicion abierta
-    open_positions = mt5.get_open_positions(config.SYMBOL)
+    # Posicion abierta
+    open_positions = bybit.get_open_positions(config.SYMBOL)
 
     if open_positions:
-        pos       = open_positions[0]
-        ticket    = pos.get("ticket")
-        pos_type  = pos.get("type")
+        pos      = open_positions[0]
+        pos_type = pos.get("type")
 
         # Trailing stop
         new_sl     = calc_trailing_sl(pos_type, curr["ema20"], curr["atr"])
         current_sl = pos.get("sl", 0)
 
         if pos_type == "long"  and new_sl > current_sl:
-            mt5.modify_sl(ticket, new_sl)
-            logger.info("Trailing SL LONG actualizado: %.2f", new_sl)
+            bybit.modify_sl(config.SYMBOL, pos_type, new_sl)
+            logger.info("Trailing SL LONG: %.2f", new_sl)
         elif pos_type == "short" and new_sl < current_sl:
-            mt5.modify_sl(ticket, new_sl)
-            logger.info("Trailing SL SHORT actualizado: %.2f", new_sl)
+            bybit.modify_sl(config.SYMBOL, pos_type, new_sl)
+            logger.info("Trailing SL SHORT: %.2f", new_sl)
 
-        # Cierre forzado EOD
+        # Cierre EOD
         hour = datetime.now(timezone.utc).hour
         if hour >= config.ORB_HOUR_CLOSE:
             logger.info("Cierre EOD forzado (hora UTC: %d)", hour)
-            mt5.close_position(pos)
+            bybit.close_position(pos)
             if active_trade:
                 sm.append_trade({**active_trade, "exit": curr["close"], "exit_reason": "EOD"})
             active_trade = None
@@ -144,16 +145,13 @@ def _cycle():
         risk_pct = get_risk_pct(regime, dd_pct)
         sl, tp   = calc_sl_tp(signal, curr["close"], curr["atr"])
         lot      = calc_lot_size(balance, curr["atr"], risk_pct)
-
         chop_val = curr.get("h4_chop", 0)
         st_dir   = curr.get("h4_st_dir", 0)
 
-        logger.info(
-            "SENAL: %s | Regimen: %s (CHOP=%.0f ST=%+d) | Risk=%.1f%%",
-            signal.upper(), regime, chop_val, st_dir, risk_pct * 100
-        )
+        logger.info("SENAL: %s | Regimen: %s (CHOP=%.0f ST=%+d) | Risk=%.1f%%",
+                    signal.upper(), regime, chop_val, st_dir, risk_pct * 100)
 
-        result = mt5.open_order(
+        result = bybit.open_order(
             symbol=config.SYMBOL,
             order_type=signal,
             lot=lot,
@@ -176,31 +174,23 @@ def _cycle():
                 "h4_st_dir":  int(st_dir),
                 "entry_time": datetime.now(timezone.utc).isoformat(),
             }
-            logger.info(
-                "ORDEN ABIERTA: %s BTCUSD  entry=%.2f  sl=%.2f  tp=%.2f  lot=%.4f",
-                signal.upper(), curr["close"], sl, tp, lot
-            )
+            logger.info("ORDEN ABIERTA: %s %s  entry=%.2f  sl=%.2f  tp=%.2f  lot=%.4f",
+                        signal.upper(), config.SYMBOL, curr["close"], sl, tp, lot)
         else:
             logger.error("Error al abrir orden: %s", result["error"])
-
     else:
-        chop_val = curr.get("h4_chop", 0)
-        st_dir   = curr.get("h4_st_dir", 0)
-        logger.debug(
-            "Sin senal | RSI=%.1f  MACD=%.1f  ADX=%.1f  CHOP=%.0f  ST=%+d  DD=%.1f%%",
-            curr.get("rsi", 0), curr.get("macd_hist", 0), curr.get("adx", 0),
-            chop_val, st_dir, dd_pct * 100
-        )
+        logger.debug("Sin senal | RSI=%.1f  MACD=%.1f  ADX=%.1f  CHOP=%.0f  ST=%+d  DD=%.1f%%",
+                     curr.get("rsi", 0), curr.get("macd_hist", 0), curr.get("adx", 0),
+                     curr.get("h4_chop", 0), curr.get("h4_st_dir", 0), dd_pct * 100)
 
     sm.save_state(account, signal or "no_signal", active_trade, cft)
 
 
 def _close_all():
     global active_trade
-    positions = mt5.get_open_positions(config.SYMBOL)
-    for pos in positions:
-        mt5.close_position(pos)
-        logger.info("Posicion cerrada forzada: ticket=%s", pos.get("ticket"))
+    for pos in bybit.get_open_positions(config.SYMBOL):
+        bybit.close_position(pos)
+        logger.info("Posicion cerrada forzada: %s size=%.4f", pos.get("type"), pos.get("size", 0))
     active_trade = None
 
 
