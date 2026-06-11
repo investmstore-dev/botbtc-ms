@@ -18,16 +18,85 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+import os
 import config
 import bybit_connector as bybit
 import state_manager as sm
 from strategy import (compute_indicators, check_entry,
                       get_risk_pct, calc_lot_size, calc_sl_tp, calc_trailing_sl)
 
-INITIAL_BALANCE = 10_000
-LOOP_INTERVAL   = 60
-active_trade    = None
-peak_equity     = INITIAL_BALANCE
+INITIAL_BALANCE        = 10_000
+LOOP_INTERVAL          = 60
+SENTIMENT_REFRESH_SECS = 8 * 3600   # refrescar funding + F&G cada 8h
+active_trade           = None
+peak_equity            = INITIAL_BALANCE
+_last_sentiment_update = 0.0
+
+
+def _refresh_sentiment():
+    """Descarga funding rate y Fear&Greed si los datos tienen mas de 8h."""
+    global _last_sentiment_update
+    if time.time() - _last_sentiment_update < SENTIMENT_REFRESH_SECS:
+        return
+
+    logger.info("Actualizando datos de sentimiento (funding rate + F&G)...")
+    try:
+        import requests
+        from datetime import datetime, timezone as tz
+
+        # ── Funding rate: ultimas 200 entradas (cubre 66 dias) ───────────────
+        end_ms = int(datetime.now(tz.utc).timestamp() * 1000)
+        r = requests.get(
+            "https://api.bybit.com/v5/market/funding/history",
+            params={"category": "linear", "symbol": "BTCUSDT",
+                    "endTime": end_ms, "limit": 200},
+            timeout=10
+        )
+        rows = r.json()["result"]["list"]
+        import pandas as pd
+        new_fund = pd.DataFrame([{
+            "datetime": datetime.fromtimestamp(int(x["fundingRateTimestamp"]) / 1000,
+                                               tz=tz.utc).replace(tzinfo=None),
+            "funding_rate": float(x["fundingRate"])
+        } for x in rows])
+        new_fund.set_index("datetime", inplace=True)
+        new_fund.sort_index(inplace=True)
+
+        # Fusionar con CSV existente
+        csv_path = config.FUNDING_CSV
+        if os.path.exists(csv_path):
+            old = pd.read_csv(csv_path, parse_dates=["datetime"], index_col="datetime")
+            new_fund = pd.concat([old, new_fund])
+            new_fund = new_fund[~new_fund.index.duplicated(keep="last")]
+            new_fund.sort_index(inplace=True)
+        new_fund.to_csv(csv_path)
+
+        # ── Fear & Greed ──────────────────────────────────────────────────────
+        r2 = requests.get(
+            "https://api.alternative.me/fng/?limit=30&format=json", timeout=10
+        )
+        fg_rows = pd.DataFrame([{
+            "date": datetime.fromtimestamp(int(d["timestamp"])).date(),
+            "fg_value": int(d["value"]),
+            "fg_class": d["value_classification"]
+        } for d in r2.json()["data"]])
+        fg_rows.set_index("date", inplace=True)
+        fg_rows.sort_index(inplace=True)
+
+        fg_path = config.FG_CSV
+        if os.path.exists(fg_path):
+            old_fg = pd.read_csv(fg_path, parse_dates=["date"], index_col="date")
+            old_fg.index = pd.to_datetime(old_fg.index).date
+            fg_rows = pd.concat([old_fg, fg_rows])
+            fg_rows = fg_rows[~fg_rows.index.duplicated(keep="last")]
+            fg_rows.sort_index(inplace=True)
+        fg_rows.to_csv(fg_path)
+
+        _last_sentiment_update = time.time()
+        logger.info("Sentimiento actualizado: funding=%d entradas  F&G=%d dias",
+                    len(new_fund), len(fg_rows))
+    except Exception as e:
+        logger.warning("Error actualizando sentimiento: %s", e)
 
 
 def run():
@@ -51,8 +120,12 @@ def run():
 
     peak_equity = account.get("equity", INITIAL_BALANCE)
 
+    # Primera carga de sentimiento al arrancar
+    _refresh_sentiment()
+
     while True:
         try:
+            _refresh_sentiment()   # no-op si los datos tienen menos de 8h
             _cycle()
         except KeyboardInterrupt:
             logger.info("Bot detenido por el usuario.")
