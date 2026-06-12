@@ -10,7 +10,8 @@ class CORSHandler(SimpleHTTPRequestHandler):
     def log_message(self, *args):
         pass  # silenciar logs
 
-os.chdir(os.path.join(os.path.dirname(__file__), "data"))
+# data/ vive en la raiz del proyecto (un nivel arriba de utils/)
+os.chdir(os.path.join(os.path.dirname(os.path.dirname(__file__)), "data"))
 server = HTTPServer(("127.0.0.1", 8091), CORSHandler)
 print("Data server corriendo en http://localhost:8091/")
 server.serve_forever()

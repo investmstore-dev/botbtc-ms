@@ -23,7 +23,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 # Reutiliza el cargador de .env del conector
-from bybit_connector import _load_env
+from utils.bybit_connector import _load_env
 _load_env()
 
 BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")

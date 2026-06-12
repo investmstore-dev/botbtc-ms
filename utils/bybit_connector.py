@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 # ── Cargar credenciales desde .env ────────────────────────────────────────────
 def _load_env():
-    env_path = os.path.join(os.path.dirname(__file__), ".env")
+    # .env vive en la raiz del proyecto (un nivel arriba de utils/)
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     if os.path.exists(env_path):
         with open(env_path) as f:
             for line in f:
