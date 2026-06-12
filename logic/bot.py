@@ -20,11 +20,11 @@ logger = logging.getLogger(__name__)
 
 import os
 import config
-import bybit_connector as bybit
-import state_manager as sm
-import notifier
-from strategy import (compute_indicators, check_entry,
-                      get_risk_pct, calc_lot_size, calc_sl_tp, calc_trailing_sl)
+from utils import bybit_connector as bybit
+from utils import state_manager as sm
+from utils import notifier
+from logic.strategy import (compute_indicators, check_entry,
+                            get_risk_pct, calc_lot_size, calc_sl_tp, calc_trailing_sl)
 
 INITIAL_BALANCE        = 10_000
 LOOP_INTERVAL          = 60
@@ -164,15 +164,24 @@ def _handle_closed_trade(balance: float, reason: str):
     active_trade = None
 
 
+_REPORT_MARKER = os.path.join(config.DATA_DIR, "last_report.txt")
+
+
 def _maybe_daily_report(account: dict, cft: dict):
-    """Envía el reporte diario una vez al dia, despues del cierre de sesion (20:00 UTC)."""
+    """Envía el reporte diario una vez al dia, despues del cierre de sesion (20:00 UTC).
+    La fecha del ultimo reporte se persiste en disco para no duplicar tras reinicios."""
     global _last_report_date, _trades_today
     now = datetime.now(timezone.utc)
     if now.hour < config.ORB_HOUR_CLOSE:
         return
-    if _last_report_date == now.date():
+    if _last_report_date is None and os.path.exists(_REPORT_MARKER):
+        with open(_REPORT_MARKER) as f:
+            _last_report_date = f.read().strip()
+    if _last_report_date == str(now.date()):
         return
-    _last_report_date = now.date()
+    _last_report_date = str(now.date())
+    with open(_REPORT_MARKER, "w") as f:
+        f.write(_last_report_date)
     notifier.notify_daily_report(account, cft, _trades_today, _last_regime_info)
     logger.info("Reporte diario enviado (%d trades hoy)", len(_trades_today))
     _trades_today = []

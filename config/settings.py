@@ -3,10 +3,6 @@
 # Cuenta: Crypto Fund Trader Challenge $10k
 # Version: v5b (backtest 2y: +36.6%, DD=-7.8%, PF=1.59, Short PF=1.87)
 
-MT5_LOGIN    = 0              # Reemplazar con login real CFT
-MT5_PASSWORD = ""             # Reemplazar con password real CFT
-MT5_SERVER   = "CryptoFundTrader-Live"
-
 SYMBOL     = "BTCUSD"
 TIMEFRAME  = "H1"
 

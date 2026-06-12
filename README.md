@@ -41,66 +41,49 @@ El bot detecta automáticamente el régimen de mercado y ajusta el riesgo:
 
 ```
 Python 3.12+
-MetaTrader 5 (para bridge con Bybit via EA)
+Cuenta Bybit (Demo Trading o Live) conectada a CFT
 ```
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**`requirements.txt`:**
-```
-pandas
-numpy
-requests
-MetaTrader5
-```
-
 ---
 
 ## Configuración inicial
 
-### 1. Credenciales CFT en `config.py`
+### 1. Credenciales en `.env` (raíz del proyecto, NO se sube a git)
 
-```python
-MT5_LOGIN    = 123456          # Tu login CFT
-MT5_PASSWORD = "tu_password"   # Tu password CFT
-MT5_SERVER   = "CryptoFundTrader-Live"
+```
+BYBIT_API_KEY=tu_api_key
+BYBIT_API_SECRET=tu_api_secret
+BYBIT_DEMO=true                  # false para cuenta live
+
+# Notificaciones Telegram (opcional)
+TELEGRAM_BOT_TOKEN=token_de_botfather
+TELEGRAM_CHAT_ID=id_del_grupo
 ```
 
-### 2. Descargar datos de sentimiento
+Para obtener el chat_id de Telegram: envía un mensaje al grupo con el bot y corre
+`python -m utils.notifier --get-chat-id`. Prueba con `python -m utils.notifier --test`.
 
-El bot necesita el Funding Rate de Bybit y el Fear & Greed Index actualizados.
+### 2. Iniciar todo (bot + dashboard)
 
 ```bash
-python download_sentiment.py
+start_bot.bat     # bot + data server + dashboard, abre el navegador
+stop_bot.bat      # detiene todo
+tail_log.bat      # ver el log en vivo
 ```
 
-Esto genera:
-- `btcusdt_funding_rate.csv` — funding rate cada 8h
-- `fear_greed_index.csv` — índice diario
-
-**Programar actualización automática cada 8 horas** (Windows Task Scheduler):
-
-```
-Programa: python
-Argumentos: C:\ruta\botbtc-ms\download_sentiment.py
-Disparador: Cada 8 horas
-```
-
-### 3. Instalar el EA Bridge en MetaTrader 5
-
-Abrir MetaTrader 5 → `File > Open Data Folder > MQL5 > Experts`  
-Copiar `BotBTC_Bridge.mq5` ahí y compilar desde el Editor MQL5.  
-Arrastrar el EA al gráfico BTCUSD H1 y activar "Allow Algo Trading".
-
-### 4. Iniciar el bot
+O manualmente desde la raíz del proyecto:
 
 ```bash
-python bot.py
+python -m logic.bot           # solo el bot
+python -m utils.data_server   # servidor de datos del dashboard (puerto 8091)
 ```
 
-El bot genera logs en `botbtc.log` y actualiza archivos JSON en `data/` para el dashboard.
+El bot genera logs en `botbtc.log`, actualiza `data/` para el dashboard y
+refresca el sentimiento (funding + Fear&Greed) automáticamente cada 8h.
 
 ---
 
@@ -108,25 +91,31 @@ El bot genera logs en `botbtc.log` y actualiza archivos JSON en `data/` para el 
 
 ```
 botbtc-ms/
-├── config.py              # Todos los parámetros (editar aquí)
-├── strategy.py            # Lógica: Supertrend, Choppiness, señales, sizing
-├── bot.py                 # Loop principal, trailing stop, EOD close, guardas CFT
-├── mt5_connector.py       # Bridge Python ↔ MetaTrader 5
-├── state_manager.py       # Estado JSON para el dashboard
-├── BotBTC_Bridge.mq5      # EA MetaTrader 5 (bridge HTTP)
-├── download_sentiment.py  # Descarga Bybit funding + Fear & Greed (correr cada 8h)
-├── download_bybit.py      # Descarga histórico H1 BTCUSDT para backtests
-├── backtest_cft_v5b.py    # Backtest de referencia (versión final)
-├── challenge_tracker.py   # Analiza cuántos días tomó cada challenge
-└── data/                  # Estado en tiempo real (generado por el bot)
-    ├── state.json
-    ├── trades.json
-    └── equity.json
+├── config/
+│   └── settings.py        # Todos los parámetros (editar aquí)
+├── logic/
+│   ├── bot.py             # Loop principal, trailing stop, EOD close, guardas CFT
+│   └── strategy.py        # Supertrend, Choppiness, señales, sizing
+├── utils/
+│   ├── bybit_connector.py # API Bybit V5 (cuenta, velas, órdenes, SL/TP)
+│   ├── state_manager.py   # Estado JSON para el dashboard (escritura atómica)
+│   ├── notifier.py        # Notificaciones Telegram (trades + reporte diario)
+│   └── data_server.py     # Servidor CORS puerto 8091 para el dashboard
+├── model/
+│   ├── backtest_cft_v5b.py  # Backtest de referencia (versión final)
+│   ├── backtest_*.py        # Iteraciones históricas (v4, v5, v5c, 2026)
+│   ├── challenge_tracker.py # Analiza cuántos días tomó cada challenge
+│   ├── download_bybit.py    # Descarga histórico H1 BTCUSDT
+│   ├── download_sentiment.py# Descarga funding + Fear&Greed manual
+│   └── legacy_mt5/          # Arquitectura MT5 antigua (no se usa)
+├── data/                  # Estado en tiempo real (generado por el bot)
+├── start_bot.bat / stop_bot.bat / tail_log.bat
+└── .env                   # Credenciales (no versionado)
 ```
 
 ---
 
-## Parámetros clave (`config.py`)
+## Parámetros clave (`config/settings.py`)
 
 ```python
 # Riesgo por régimen de mercado
@@ -183,14 +172,14 @@ Lee los archivos `data/state.json`, `data/trades.json` y `data/equity.json` gene
 
 ```bash
 # Descargar datos históricos H1
-python download_bybit.py
+python model/download_bybit.py
 
 # Descargar sentimiento
-python download_sentiment.py
+python model/download_sentiment.py
 
 # Correr backtest final (v5b)
-python backtest_cft_v5b.py
+python model/backtest_cft_v5b.py
 
 # Ver días por challenge
-python challenge_tracker.py
+python model/challenge_tracker.py
 ```

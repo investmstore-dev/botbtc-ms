@@ -13,11 +13,11 @@ if errorlevel 1 (
 )
 
 :: 1. Bot principal (sin ventana)
-start /b "" pythonw bot.py
+start /b "" pythonw -m logic.bot
 echo [OK] Bot iniciado en segundo plano
 
 :: 2. Servidor de datos para el dashboard (puerto 8091, con CORS)
-start /b "" pythonw data_server.py
+start /b "" pythonw -m utils.data_server
 echo [OK] Servidor de datos iniciado en http://localhost:8091
 
 :: 3. Dashboard (puerto 8090)
