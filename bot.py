@@ -31,6 +31,8 @@ SENTIMENT_REFRESH_SECS = 8 * 3600   # refrescar funding + F&G cada 8h
 active_trade           = None
 peak_equity            = INITIAL_BALANCE
 _last_sentiment_update = 0.0
+_last_status_log       = 0.0
+STATUS_LOG_SECS        = 30 * 60   # resumen "sin senal" cada 30 min
 
 
 def _refresh_sentiment():
@@ -253,9 +255,12 @@ def _cycle():
         else:
             logger.error("Error al abrir orden: %s", result["error"])
     else:
-        logger.debug("Sin senal | RSI=%.1f  MACD=%.1f  ADX=%.1f  CHOP=%.0f  ST=%+d  DD=%.1f%%",
-                     curr.get("rsi", 0), curr.get("macd_hist", 0), curr.get("adx", 0),
-                     curr.get("h4_chop", 0), curr.get("h4_st_dir", 0), dd_pct * 100)
+        global _last_status_log
+        if time.time() - _last_status_log >= STATUS_LOG_SECS:
+            _last_status_log = time.time()
+            logger.info("Sin senal | RSI=%.1f  MACD=%.1f  ADX=%.1f  CHOP=%.0f  ST=%+d  DD=%.1f%%  equity=$%.2f",
+                        curr.get("rsi", 0), curr.get("macd_hist", 0), curr.get("adx", 0),
+                        curr.get("h4_chop", 0), curr.get("h4_st_dir", 0), dd_pct * 100, equity)
 
     sm.save_state(account, signal or "no_signal", active_trade, cft)
 

@@ -1,12 +1,22 @@
 """Persiste el estado del bot BTC en archivos JSON para el dashboard."""
 import json
 import os
+import tempfile
 from datetime import datetime, date
 from config import DATA_DIR, STATE_FILE, TRADES_FILE, EQUITY_FILE
 
 
 def _ensure_dir():
     os.makedirs(DATA_DIR, exist_ok=True)
+
+
+def _atomic_write(path: str, data):
+    """Escribe JSON de forma atómica via archivo temporal para evitar corrupción."""
+    dir_ = os.path.dirname(path)
+    with tempfile.NamedTemporaryFile("w", dir=dir_, delete=False, suffix=".tmp") as tf:
+        json.dump(data, tf, indent=2)
+        tmp_path = tf.name
+    os.replace(tmp_path, path)  # rename atómico en Windows
 
 
 def _now():
@@ -23,8 +33,7 @@ def save_state(account: dict, signal: str, active_trade: dict | None,
         "active_trade": active_trade,
         "cft":          cft_status,
     }
-    with open(STATE_FILE, "w") as f:
-        json.dump(state, f, indent=2)
+    _atomic_write(STATE_FILE, state)
 
 
 def append_trade(trade: dict):
@@ -32,8 +41,7 @@ def append_trade(trade: dict):
     trades = load_trades()
     trade["timestamp"] = _now()
     trades.append(trade)
-    with open(TRADES_FILE, "w") as f:
-        json.dump(trades, f, indent=2)
+    _atomic_write(TRADES_FILE, trades)
 
 
 def load_trades() -> list:
@@ -49,15 +57,17 @@ def append_equity(equity: float, balance: float):
     history.append({"time": _now(), "equity": equity, "balance": balance})
     if len(history) > 2000:
         history = history[-2000:]
-    with open(EQUITY_FILE, "w") as f:
-        json.dump(history, f, indent=2)
+    _atomic_write(EQUITY_FILE, history)
 
 
 def load_equity() -> list:
     if not os.path.exists(EQUITY_FILE):
         return []
-    with open(EQUITY_FILE) as f:
-        return json.load(f)
+    try:
+        with open(EQUITY_FILE) as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
 
 
 def calc_cft_status(account: dict, initial_balance: float) -> dict:
