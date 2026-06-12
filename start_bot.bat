@@ -21,7 +21,7 @@ start /b "" pythonw -m utils.data_server
 echo [OK] Servidor de datos iniciado en http://localhost:8091
 
 :: 3. Dashboard (puerto 8090)
-start /b "" python -m http.server 8090 --directory "..\botbtc-dashboard-ms"
+start /b "" pythonw -m utils.dashboard_server
 echo [OK] Dashboard iniciado en http://localhost:8090
 
 :: Esperar 2 segundos y abrir el dashboard en el navegador
