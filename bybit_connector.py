@@ -60,7 +60,7 @@ def _headers(ts: str, sig: str) -> dict:
 def _get(path: str, params: dict) -> dict:
     qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
     ts, sig = _sign(qs)
-    r = requests.get(BASE_URL + path, params=params, headers=_headers(ts, sig), timeout=10)
+    r = requests.get(f"{BASE_URL}{path}?{qs}", headers=_headers(ts, sig), timeout=10)
     r.raise_for_status()
     data = r.json()
     if data.get("retCode") != 0:
@@ -254,6 +254,33 @@ def close_position(position: dict) -> bool:
     except Exception as e:
         logger.error("close_position error: %s", e)
         return False
+
+
+# ── PnL de posiciones cerradas ────────────────────────────────────────────────
+
+def get_closed_pnl(symbol: str, limit: int = 10) -> list[dict]:
+    """Retorna las últimas posiciones cerradas con su PnL realizado."""
+    try:
+        result = _get("/v5/position/closed-pnl", {
+            "category": CATEGORY,
+            "symbol":   symbol,
+            "limit":    limit,
+        })
+        closed = []
+        for p in result.get("list", []):
+            closed.append({
+                "type":       "long" if p.get("side") == "Sell" else "short",  # side = orden de cierre
+                "qty":        float(p.get("qty", 0)),
+                "entry":      float(p.get("avgEntryPrice", 0)),
+                "exit":       float(p.get("avgExitPrice", 0)),
+                "pnl":        float(p.get("closedPnl", 0)),
+                "order_id":   p.get("orderId", ""),
+                "closed_at":  int(p.get("updatedTime", 0)),
+            })
+        return closed
+    except Exception as e:
+        logger.error("get_closed_pnl error: %s", e)
+        return []
 
 
 # ── Precio actual ─────────────────────────────────────────────────────────────

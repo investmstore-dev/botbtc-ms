@@ -22,6 +22,7 @@ import os
 import config
 import bybit_connector as bybit
 import state_manager as sm
+import notifier
 from strategy import (compute_indicators, check_entry,
                       get_risk_pct, calc_lot_size, calc_sl_tp, calc_trailing_sl)
 
@@ -33,6 +34,9 @@ peak_equity            = INITIAL_BALANCE
 _last_sentiment_update = 0.0
 _last_status_log       = 0.0
 STATUS_LOG_SECS        = 30 * 60   # resumen "sin senal" cada 30 min
+_last_report_date      = None      # fecha del ultimo reporte diario enviado
+_trades_today          = []        # trades cerrados hoy (para el reporte)
+_last_regime_info      = {}        # ultimo regimen conocido (para el reporte)
 
 
 def _refresh_sentiment():
@@ -139,6 +143,41 @@ def run():
         time.sleep(LOOP_INTERVAL)
 
 
+def _handle_closed_trade(balance: float, reason: str):
+    """Registra y notifica el cierre del trade activo usando el PnL real de Bybit."""
+    global active_trade
+    if not active_trade:
+        return
+
+    exit_price, pnl = 0.0, 0.0
+    closed = bybit.get_closed_pnl(config.SYMBOL, limit=1)
+    if closed:
+        exit_price = closed[0]["exit"]
+        pnl        = closed[0]["pnl"]
+
+    trade_record = {**active_trade, "exit": exit_price, "pnl": pnl,
+                    "exit_reason": reason}
+    sm.append_trade(trade_record)
+    _trades_today.append(trade_record)
+    notifier.notify_trade_close(active_trade, exit_price, pnl, balance, reason)
+    logger.info("Trade cerrado (%s): exit=%.2f pnl=%+.2f", reason, exit_price, pnl)
+    active_trade = None
+
+
+def _maybe_daily_report(account: dict, cft: dict):
+    """Envía el reporte diario una vez al dia, despues del cierre de sesion (20:00 UTC)."""
+    global _last_report_date, _trades_today
+    now = datetime.now(timezone.utc)
+    if now.hour < config.ORB_HOUR_CLOSE:
+        return
+    if _last_report_date == now.date():
+        return
+    _last_report_date = now.date()
+    notifier.notify_daily_report(account, cft, _trades_today, _last_regime_info)
+    logger.info("Reporte diario enviado (%d trades hoy)", len(_trades_today))
+    _trades_today = []
+
+
 def _cycle():
     global active_trade, peak_equity
 
@@ -159,6 +198,8 @@ def _cycle():
     # Guardas CFT
     if cft["dd_violated"]:
         logger.error("DRAWDOWN MAXIMO VIOLADO (%.2f%%). Cerrando posiciones.", cft["max_dd_pct"])
+        notifier.send(f"🚨 <b>ALERTA: DRAWDOWN MÁXIMO VIOLADO</b>\n"
+                      f"DD: {cft['max_dd_pct']:.2f}% — cerrando todas las posiciones.")
         _close_all()
         sm.save_state(account, "DD_VIOLATED", active_trade, cft)
         return
@@ -171,6 +212,8 @@ def _cycle():
 
     if cft["target_reached"]:
         logger.info("OBJETIVO ALCANZADO (%.2f%%)! Solicitar fondeo CFT.", cft["profit_pct"])
+        notifier.send(f"🏆 <b>¡OBJETIVO CFT ALCANZADO!</b>\n"
+                      f"Profit: +{cft['profit_pct']:.2f}% — solicitar siguiente fase/fondeo.")
         _close_all()
         sm.save_state(account, "TARGET_REACHED", active_trade, cft)
         return
@@ -186,6 +229,22 @@ def _cycle():
 
     # Posicion abierta
     open_positions = bybit.get_open_positions(config.SYMBOL)
+
+    # Guardar regimen actual para el reporte diario
+    global _last_regime_info
+    _last_regime_info = {
+        "regime": ("TREND" if curr.get("h4_chop", 50) < config.CHOP_TREND_MAX
+                   else "CHOPPY" if curr.get("h4_chop", 50) > config.CHOP_CHOPPY_MIN
+                   else "NEUTRAL"),
+        "chop":   float(curr.get("h4_chop", 0)),
+        "st_dir": int(curr.get("h4_st_dir", 0)),
+    }
+
+    # Detectar cierre por SL/TP (teniamos trade activo pero Bybit ya no muestra posicion)
+    if active_trade and not open_positions:
+        _handle_closed_trade(balance, "SL/TP alcanzado")
+
+    _maybe_daily_report(account, cft)
 
     if open_positions:
         pos      = open_positions[0]
@@ -207,9 +266,8 @@ def _cycle():
         if hour >= config.ORB_HOUR_CLOSE:
             logger.info("Cierre EOD forzado (hora UTC: %d)", hour)
             bybit.close_position(pos)
-            if active_trade:
-                sm.append_trade({**active_trade, "exit": curr["close"], "exit_reason": "EOD"})
-            active_trade = None
+            time.sleep(2)  # esperar a que Bybit registre el PnL realizado
+            _handle_closed_trade(balance, "Cierre EOD (20:00 UTC)")
 
         sm.save_state(account, "holding", active_trade, cft)
         return
@@ -252,6 +310,7 @@ def _cycle():
             }
             logger.info("ORDEN ABIERTA: %s %s  entry=%.2f  sl=%.2f  tp=%.2f  lot=%.4f",
                         signal.upper(), config.SYMBOL, curr["close"], sl, tp, lot)
+            notifier.notify_trade_open(active_trade)
         else:
             logger.error("Error al abrir orden: %s", result["error"])
     else:
