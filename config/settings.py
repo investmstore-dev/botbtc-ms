@@ -1,31 +1,53 @@
-# BOT Mining Store BTC -- Configuracion
-# Estrategia: ORB + MACD/RSI + Supertrend H4 + Choppiness Index | BTCUSD H1
+# BOT Mining Store -- Configuracion
+# Estrategia: ORB + MACD/RSI + Supertrend H4 + Choppiness Index | H1
 # Cuenta: Crypto Fund Trader Challenge $10k
-# Version: v5b (backtest 2y: +36.6%, DD=-7.8%, PF=1.59, Short PF=1.87)
+# Version: v6 multi-par (BTC v5b + DOGE config-D) | modo SINGLE
+#
+# Backtest portafolio 2y (BTC+DOGE, 1 posicion a la vez):
+#   +78.5% | DD -8.0% | PF 1.76 | 6 challenges
 
-SYMBOL     = "BTCUSD"
-TIMEFRAME  = "H1"
+TIMEFRAME = "H1"
 
-# ── Riesgo dinamico por regimen de mercado (Choppiness Index H4) ─────────────
-# El bot detecta automaticamente el regimen y ajusta el riesgo
-RISK_TREND   = 0.018   # CHOP H4 < 48 -> tendencia fuerte -> 1.8%
-RISK_NEUTRAL = 0.010   # CHOP H4 48-57 -> mercado neutro -> 1.0%
-RISK_CHOPPY  = 0.005   # CHOP H4 > 57 -> mercado lateral -> 0.5%
+# ── Pares operados (simbolos Bybit linear USDT-perpetuo) ──────────────────────
+# El orden define la prioridad cuando ambos dan senal en modo SINGLE.
+SYMBOLS   = ["BTCUSDT", "DOGEUSDT"]
+RISK_MODE = "single"   # 'single' = max 1 posicion a la vez entre TODOS los pares
 
-# Reduccion adicional si hay drawdown acumulado
-RISK_DD4_MAX = 0.008   # si DD >= 4%: max 0.8%
-RISK_DD6_MAX = 0.005   # si DD >= 6%: max 0.5%
+# ── Riesgo y filtros POR PAR ──────────────────────────────────────────────────
+# BTCUSDT  -> v5b original
+# DOGEUSDT -> config-D optimizada (DD-guard agresivo para no violar el -10% CFT)
+SYMBOL_CONFIGS = {
+    "BTCUSDT": {
+        "risk_trend":   0.018,  # CHOP H4 < 48
+        "risk_neutral": 0.010,  # CHOP H4 48-57
+        "risk_choppy":  0.005,  # CHOP H4 > 57
+        "dd_lo": 0.04, "dd_lo_risk": 0.008,   # si DD>=4% -> max 0.8%
+        "dd_hi": 0.06, "dd_hi_risk": 0.005,   # si DD>=6% -> max 0.5%
+        "adx_min": 22, "adx_choppy": 28,
+    },
+    "DOGEUSDT": {
+        "risk_trend":   0.014,
+        "risk_neutral": 0.008,
+        "risk_choppy":  0.004,
+        "dd_lo": 0.03, "dd_lo_risk": 0.006,   # freno mas temprano (3%)
+        "dd_hi": 0.05, "dd_hi_risk": 0.003,   # y mas duro (5%)
+        "adx_min": 22, "adx_choppy": 28,
+    },
+}
+
+# Defaults (fallback si un par no esta en SYMBOL_CONFIGS)
+ADX_MIN        = 22
+ADX_CHOPPY_MIN = 28
 
 # ── Supertrend H4 ─────────────────────────────────────────────────────────────
 ST_PERIOD = 10
 ST_MULT   = 3.0
-# dir=+1 (GREEN) -> solo LONGS permitidos
-# dir=-1 (RED)   -> solo SHORTS permitidos
+# dir=+1 (GREEN) -> solo LONGS permitidos | dir=-1 (RED) -> solo SHORTS
 
 # ── Choppiness Index H4 ───────────────────────────────────────────────────────
 CHOP_PERIOD     = 14
-CHOP_TREND_MAX  = 48   # por debajo: mercado en tendencia (riesgo alto)
-CHOP_CHOPPY_MIN = 57   # por encima: mercado choppy/lateral (riesgo bajo)
+CHOP_TREND_MAX  = 48   # por debajo: mercado en tendencia
+CHOP_CHOPPY_MIN = 57   # por encima: mercado choppy/lateral
 
 # ── Indicadores H1 ────────────────────────────────────────────────────────────
 EMA_FAST    = 20
@@ -38,43 +60,37 @@ ATR_PERIOD  = 14
 ADX_PERIOD  = 14
 
 # ── Filtros de entrada ────────────────────────────────────────────────────────
-ADX_MIN        = 22            # fuerza de tendencia minima
-ADX_CHOPPY_MIN = 28            # en regimen choppy, exigir ADX mas alto
-
 RSI_LONG_MIN   = 35
 RSI_LONG_MAX   = 75
 RSI_SHORT_MIN  = 25
 RSI_SHORT_MAX  = 65
 
 # ── Filtros de sentimiento externo ────────────────────────────────────────────
-# Bybit Funding Rate (cada 8h) — sesgo del mercado de futuros
-FUND_LONG_MIN   = -0.0003     # no entrar long si funding muy negativo (squeeze)
-FUND_SHORT_MAX  =  0.00005    # solo short cuando funding <= 0 (mercado bearish)
-FUND_SHORT_MIN  = -0.0004     # no short si funding muy negativo
-
-# Fear & Greed Index (diario) — sentimiento macro
-FG_LONG_MIN    = 35            # no long si miedo extremo
-FG_SHORT_MIN   = 10            # no short en capitulacion pura
-FG_SHORT_MAX   = 70            # no short si euforia extrema
+FUND_LONG_MIN   = -0.0003
+FUND_SHORT_MAX  =  0.00005
+FUND_SHORT_MIN  = -0.0004
+FG_LONG_MIN    = 35
+FG_SHORT_MIN   = 10
+FG_SHORT_MAX   = 70
 
 # ── Opening Range Breakout (ORB) ──────────────────────────────────────────────
-ORB_HOUR_START    = 0          # inicio del rango UTC
-ORB_HOUR_END      = 4          # fin del rango / inicio del trading
-ORB_HOUR_CLOSE    = 20         # cierre forzado EOD (no overnight)
-ORB_MIN_RANGE_PCT = 0.003      # rango minimo 0.3% del precio
+ORB_HOUR_START    = 0
+ORB_HOUR_END      = 4
+ORB_HOUR_CLOSE    = 20
+ORB_MIN_RANGE_PCT = 0.003
 
 # ── Gestion de posicion ───────────────────────────────────────────────────────
-ATR_SL_MULT    = 1.2           # Stop loss = 1.2x ATR
-ATR_TRAIL_MULT = 1.0           # Trailing stop = EMA20 +/- 1x ATR
-TP_RR          = 2.2           # Take Profit = 2.2x SL (R:R 1:2.2)
-ATR_VOL_MULT   = 1.8           # Skip si ATR > 1.8x ATR_avg20 (volatilidad extrema)
-MAX_POSITIONS  = 1
+ATR_SL_MULT    = 1.2
+ATR_TRAIL_MULT = 1.0
+TP_RR          = 2.2
+ATR_VOL_MULT   = 1.8
+MAX_POSITIONS  = 1     # modo SINGLE
 
 # ── Crypto Fund Trader rules ──────────────────────────────────────────────────
-CFT_TARGET_PCT   = 0.08        # +8% objetivo fase 1
-CFT_PHASE2_PCT   = 0.05        # +5% objetivo fase 2
-CFT_MAX_DD_PCT   = 0.10        # -10% drawdown maximo sobre peak equity
-CFT_DAILY_DD_PCT = 0.05        # -5% perdida diaria maxima
+CFT_TARGET_PCT   = 0.08
+CFT_PHASE2_PCT   = 0.05
+CFT_MAX_DD_PCT   = 0.10
+CFT_DAILY_DD_PCT = 0.05
 
 # ── Archivos de estado para el dashboard ─────────────────────────────────────
 DATA_DIR    = "data"
@@ -82,6 +98,9 @@ STATE_FILE  = "data/state.json"
 TRADES_FILE = "data/trades.json"
 EQUITY_FILE = "data/equity.json"
 
-# ── Datos de sentimiento (actualizados cada 8h por scheduler) ─────────────────
-FUNDING_CSV = "btcusdt_funding_rate.csv"
-FG_CSV      = "fear_greed_index.csv"
+# ── Datos de sentimiento ──────────────────────────────────────────────────────
+# Funding rate es POR PAR; Fear & Greed es macro (compartido).
+def funding_csv(symbol: str) -> str:
+    return f"funding_{symbol}.csv"
+
+FG_CSV = "fear_greed_index.csv"

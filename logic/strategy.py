@@ -159,20 +159,21 @@ def _compute_adx(high, low, close, period):
 
 # ── Carga de sentimiento ──────────────────────────────────────────────────────
 
-def load_sentiment():
+def load_sentiment(symbol: str):
     """
-    Carga funding rate y Fear & Greed del CSV local.
+    Carga el funding rate del par y el Fear & Greed (macro) del CSV local.
     Retorna (funding_rate_actual, fg_value_actual).
-    El scheduler actualiza estos CSV cada 8h.
+    El bot actualiza estos CSV cada 8h.
     """
     import os
-    from config import FUNDING_CSV, FG_CSV
+    from config import funding_csv, FG_CSV
 
     funding = None
     fg      = None
 
-    if os.path.exists(FUNDING_CSV):
-        df_f = pd.read_csv(FUNDING_CSV, parse_dates=["datetime"], index_col="datetime")
+    fund_path = funding_csv(symbol)
+    if os.path.exists(fund_path):
+        df_f = pd.read_csv(fund_path, parse_dates=["datetime"], index_col="datetime")
         df_f.sort_index(inplace=True)
         if not df_f.empty:
             funding = float(df_f["funding_rate"].iloc[-1])
@@ -188,9 +189,12 @@ def load_sentiment():
 
 # ── Logica de entrada ─────────────────────────────────────────────────────────
 
-def check_entry(df: pd.DataFrame):
+def check_entry(df: pd.DataFrame, symbol: str, cfg: dict | None = None):
     """
-    Evalua la ultima vela cerrada H1 y retorna 'long', 'short' o None.
+    Evalua la ultima vela cerrada H1 y retorna ('long'|'short'|None, regime).
+
+    symbol: par operado (para cargar su funding rate).
+    cfg:    config del par (adx_min, adx_choppy). Si None, usa defaults globales.
 
     Filtros en cascada:
       1. Ventana horaria activa (04:00-20:00 UTC)
@@ -200,7 +204,7 @@ def check_entry(df: pd.DataFrame):
       5. Choppiness H4 define el regimen (ADX mas exigente en choppy)
       6. Momentum H1: EMA20>EMA50, MACD hist, ADX
       7. RSI en rango
-      8. Sentimiento: funding rate + Fear & Greed
+      8. Sentimiento: funding rate del par + Fear & Greed macro
       9. En choppy/neutral: solo en direccion del Supertrend H4
     """
     from config import (ADX_MIN, ADX_CHOPPY_MIN, ATR_VOL_MULT,
@@ -209,6 +213,10 @@ def check_entry(df: pd.DataFrame):
                         CHOP_TREND_MAX, CHOP_CHOPPY_MIN,
                         FUND_LONG_MIN, FUND_SHORT_MIN, FUND_SHORT_MAX,
                         FG_LONG_MIN, FG_SHORT_MIN, FG_SHORT_MAX)
+
+    cfg = cfg or {}
+    adx_min_req    = cfg.get("adx_min", ADX_MIN)
+    adx_choppy_req = cfg.get("adx_choppy", ADX_CHOPPY_MIN)
 
     if len(df) < 100:
         return None, None
@@ -242,8 +250,8 @@ def check_entry(df: pd.DataFrame):
     else:
         regime = "neutral"
 
-    # ADX mas exigente en mercado choppy
-    adx_req = ADX_CHOPPY_MIN if regime == "choppy" else ADX_MIN
+    # ADX mas exigente en mercado choppy (umbral por par)
+    adx_req = adx_choppy_req if regime == "choppy" else adx_min_req
 
     # 5. Supertrend H4 (si no hay datos, no operar)
     if st_dir == 0:
@@ -260,8 +268,8 @@ def check_entry(df: pd.DataFrame):
     orb_up = prev["close"] <= curr["orb_high"] and curr["close"] > curr["orb_high"]
     orb_dn = prev["close"] >= curr["orb_low"]  and curr["close"] < curr["orb_low"]
 
-    # 8. Sentimiento
-    funding, fg = load_sentiment()
+    # 8. Sentimiento (funding del par + F&G macro)
+    funding, fg = load_sentiment(symbol)
     if funding is None or fg is None:
         return None, None   # sin datos de sentimiento, no operar
 
@@ -300,21 +308,18 @@ def check_entry(df: pd.DataFrame):
 
 # ── Sizing ────────────────────────────────────────────────────────────────────
 
-def get_risk_pct(regime: str, dd_pct: float) -> float:
+def get_risk_pct(regime: str, dd_pct: float, cfg: dict) -> float:
     """
-    Determina el riesgo por operacion segun el regimen y el DD actual.
-    El DD acumulado puede reducir aun mas el riesgo.
+    Determina el riesgo por operacion segun el regimen, el DD actual y la
+    config del par. El DD acumulado de la cuenta puede reducir aun mas el riesgo.
     """
-    from config import (RISK_TREND, RISK_NEUTRAL, RISK_CHOPPY,
-                        RISK_DD4_MAX, RISK_DD6_MAX)
+    if   regime == "trend":   risk = cfg["risk_trend"]
+    elif regime == "neutral": risk = cfg["risk_neutral"]
+    else:                     risk = cfg["risk_choppy"]
 
-    if   regime == "trend":   risk = RISK_TREND
-    elif regime == "neutral": risk = RISK_NEUTRAL
-    else:                     risk = RISK_CHOPPY
-
-    # Reduccion adicional si hay DD significativo
-    if dd_pct >= 0.06:   risk = min(risk, RISK_DD6_MAX)
-    elif dd_pct >= 0.04: risk = min(risk, RISK_DD4_MAX)
+    # Reduccion adicional por drawdown de la cuenta (umbrales por par)
+    if   dd_pct >= cfg["dd_hi"]: risk = min(risk, cfg["dd_hi_risk"])
+    elif dd_pct >= cfg["dd_lo"]: risk = min(risk, cfg["dd_lo_risk"])
 
     return risk
 
