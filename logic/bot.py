@@ -29,14 +29,14 @@ from logic.strategy import (compute_indicators, check_entry,
 INITIAL_BALANCE        = 10_000
 LOOP_INTERVAL          = 60
 SENTIMENT_REFRESH_SECS = 8 * 3600   # refrescar funding + F&G cada 8h
-active_trade           = None
+active_trade           = None      # modo SINGLE: 1 trade a la vez (incluye "symbol")
 peak_equity            = INITIAL_BALANCE
 _last_sentiment_update = 0.0
 _last_status_log       = 0.0
 STATUS_LOG_SECS        = 30 * 60   # resumen "sin senal" cada 30 min
 _last_report_date      = None      # fecha del ultimo reporte diario enviado
 _trades_today          = []        # trades cerrados hoy (para el reporte)
-_last_regime_info      = {}        # ultimo regimen conocido (para el reporte)
+_regime_by_symbol      = {}        # ultimo regimen conocido por par (para el reporte)
 
 
 def _refresh_sentiment():
@@ -48,34 +48,37 @@ def _refresh_sentiment():
     logger.info("Actualizando datos de sentimiento (funding rate + F&G)...")
     try:
         import requests
+        import pandas as pd
         from datetime import datetime, timezone as tz
 
-        # ── Funding rate: ultimas 200 entradas (cubre 66 dias) ───────────────
         end_ms = int(datetime.now(tz.utc).timestamp() * 1000)
-        r = requests.get(
-            "https://api.bybit.com/v5/market/funding/history",
-            params={"category": "linear", "symbol": "BTCUSDT",
-                    "endTime": end_ms, "limit": 200},
-            timeout=10
-        )
-        rows = r.json()["result"]["list"]
-        import pandas as pd
-        new_fund = pd.DataFrame([{
-            "datetime": datetime.fromtimestamp(int(x["fundingRateTimestamp"]) / 1000,
-                                               tz=tz.utc).replace(tzinfo=None),
-            "funding_rate": float(x["fundingRate"])
-        } for x in rows])
-        new_fund.set_index("datetime", inplace=True)
-        new_fund.sort_index(inplace=True)
 
-        # Fusionar con CSV existente
-        csv_path = config.FUNDING_CSV
-        if os.path.exists(csv_path):
-            old = pd.read_csv(csv_path, parse_dates=["datetime"], index_col="datetime")
-            new_fund = pd.concat([old, new_fund])
-            new_fund = new_fund[~new_fund.index.duplicated(keep="last")]
+        # ── Funding rate POR PAR: ultimas 200 entradas (cubre 66 dias) ───────
+        fund_counts = {}
+        for sym in config.SYMBOLS:
+            r = requests.get(
+                "https://api.bybit.com/v5/market/funding/history",
+                params={"category": "linear", "symbol": sym,
+                        "endTime": end_ms, "limit": 200},
+                timeout=10
+            )
+            rows = r.json()["result"]["list"]
+            new_fund = pd.DataFrame([{
+                "datetime": datetime.fromtimestamp(int(x["fundingRateTimestamp"]) / 1000,
+                                                   tz=tz.utc).replace(tzinfo=None),
+                "funding_rate": float(x["fundingRate"])
+            } for x in rows])
+            new_fund.set_index("datetime", inplace=True)
             new_fund.sort_index(inplace=True)
-        new_fund.to_csv(csv_path)
+
+            csv_path = config.funding_csv(sym)
+            if os.path.exists(csv_path):
+                old = pd.read_csv(csv_path, parse_dates=["datetime"], index_col="datetime")
+                new_fund = pd.concat([old, new_fund])
+                new_fund = new_fund[~new_fund.index.duplicated(keep="last")]
+                new_fund.sort_index(inplace=True)
+            new_fund.to_csv(csv_path)
+            fund_counts[sym] = len(new_fund)
 
         # ── Fear & Greed ──────────────────────────────────────────────────────
         r2 = requests.get(
@@ -100,8 +103,9 @@ def _refresh_sentiment():
         fg_rows.to_csv(fg_path)
 
         _last_sentiment_update = time.time()
-        logger.info("Sentimiento actualizado: funding=%d entradas  F&G=%d dias",
-                    len(new_fund), len(fg_rows))
+        fund_summary = " ".join(f"{s}={n}" for s, n in fund_counts.items())
+        logger.info("Sentimiento actualizado: funding[%s]  F&G=%d dias",
+                    fund_summary, len(fg_rows))
     except Exception as e:
         logger.warning("Error actualizando sentimiento: %s", e)
 
@@ -110,9 +114,9 @@ def run():
     global active_trade, peak_equity
 
     logger.info("=" * 60)
-    logger.info("  BOT BTC -- Mining Store | Crypto Fund Trader v5b")
+    logger.info("  BOT Mining Store | Crypto Fund Trader v6 multi-par")
     logger.info("  Estrategia: ORB + Supertrend H4 + Choppiness + Sentimiento")
-    logger.info("  RISK: TREND=1.8%% | NEUTRAL=1.0%% | CHOPPY=0.5%%")
+    logger.info("  Pares: %s | Modo: %s", ", ".join(config.SYMBOLS), config.RISK_MODE.upper())
     logger.info("  Broker: Bybit %s", "DEMO" if bybit.IS_DEMO else "LIVE")
     logger.info("=" * 60)
 
@@ -149,8 +153,9 @@ def _handle_closed_trade(balance: float, reason: str):
     if not active_trade:
         return
 
+    symbol = active_trade.get("symbol", config.SYMBOLS[0])
     exit_price, pnl = 0.0, 0.0
-    closed = bybit.get_closed_pnl(config.SYMBOL, limit=1)
+    closed = bybit.get_closed_pnl(symbol, limit=1)
     if closed:
         exit_price = closed[0]["exit"]
         pnl        = closed[0]["pnl"]
@@ -160,7 +165,7 @@ def _handle_closed_trade(balance: float, reason: str):
     sm.append_trade(trade_record)
     _trades_today.append(trade_record)
     notifier.notify_trade_close(active_trade, exit_price, pnl, balance, reason)
-    logger.info("Trade cerrado (%s): exit=%.2f pnl=%+.2f", reason, exit_price, pnl)
+    logger.info("Trade cerrado %s (%s): exit=%.6f pnl=%+.2f", symbol, reason, exit_price, pnl)
     active_trade = None
 
 
@@ -182,7 +187,7 @@ def _maybe_daily_report(account: dict, cft: dict):
     _last_report_date = str(now.date())
     with open(_REPORT_MARKER, "w") as f:
         f.write(_last_report_date)
-    notifier.notify_daily_report(account, cft, _trades_today, _last_regime_info)
+    notifier.notify_daily_report(account, cft, _trades_today, _regime_by_symbol)
     logger.info("Reporte diario enviado (%d trades hoy)", len(_trades_today))
     _trades_today = []
 
@@ -227,84 +232,88 @@ def _cycle():
         sm.save_state(account, "TARGET_REACHED", active_trade, cft)
         return
 
-    # Velas H1
-    df = bybit.get_candles(config.SYMBOL, config.TIMEFRAME, count=400)
-    if df is None or len(df) < 150:
-        logger.warning("Datos insuficientes (%d velas).", len(df) if df is not None else 0)
+    # Calcular indicadores de cada par y detectar posicion abierta (cualquiera)
+    global _regime_by_symbol
+    dfs, open_sym, open_pos = {}, None, None
+    for sym in config.SYMBOLS:
+        df = bybit.get_candles(sym, config.TIMEFRAME, count=400)
+        if df is None or len(df) < 150:
+            logger.warning("Datos insuficientes %s (%d velas).", sym,
+                           len(df) if df is not None else 0)
+            continue
+        df = compute_indicators(df)
+        dfs[sym] = df
+        curr = df.iloc[-1]
+        _regime_by_symbol[sym] = {
+            "regime": ("TREND" if curr.get("h4_chop", 50) < config.CHOP_TREND_MAX
+                       else "CHOPPY" if curr.get("h4_chop", 50) > config.CHOP_CHOPPY_MIN
+                       else "NEUTRAL"),
+            "chop":   float(curr.get("h4_chop", 0)),
+            "st_dir": int(curr.get("h4_st_dir", 0)),
+        }
+        positions = bybit.get_open_positions(sym)
+        if positions:
+            open_sym, open_pos = sym, positions[0]
+
+    if not dfs:
         return
 
-    df = compute_indicators(df)
-    curr = df.iloc[-1]
-
-    # Posicion abierta
-    open_positions = bybit.get_open_positions(config.SYMBOL)
-
-    # Guardar regimen actual para el reporte diario
-    global _last_regime_info
-    _last_regime_info = {
-        "regime": ("TREND" if curr.get("h4_chop", 50) < config.CHOP_TREND_MAX
-                   else "CHOPPY" if curr.get("h4_chop", 50) > config.CHOP_CHOPPY_MIN
-                   else "NEUTRAL"),
-        "chop":   float(curr.get("h4_chop", 0)),
-        "st_dir": int(curr.get("h4_st_dir", 0)),
-    }
-
-    # Detectar cierre por SL/TP (teniamos trade activo pero Bybit ya no muestra posicion)
-    if active_trade and not open_positions:
+    # Detectar cierre por SL/TP (teniamos trade activo pero Bybit ya no lo muestra)
+    if active_trade and open_sym is None:
         _handle_closed_trade(balance, "SL/TP alcanzado")
 
     _maybe_daily_report(account, cft)
 
-    if open_positions:
-        pos      = open_positions[0]
-        pos_type = pos.get("type")
+    # ── Hay una posicion abierta: gestionarla (trailing + EOD) ───────────────
+    if open_sym is not None:
+        curr     = dfs[open_sym].iloc[-1]
+        pos_type = open_pos.get("type")
 
-        # Trailing stop
         new_sl     = calc_trailing_sl(pos_type, curr["ema20"], curr["atr"])
-        current_sl = pos.get("sl", 0)
-
-        if pos_type == "long"  and new_sl > current_sl:
-            bybit.modify_sl(config.SYMBOL, pos_type, new_sl)
-            logger.info("Trailing SL LONG: %.2f", new_sl)
+        current_sl = open_pos.get("sl", 0)
+        if pos_type == "long" and new_sl > current_sl:
+            bybit.modify_sl(open_sym, pos_type, new_sl)
+            logger.info("Trailing SL LONG %s: %.6f", open_sym, new_sl)
         elif pos_type == "short" and new_sl < current_sl:
-            bybit.modify_sl(config.SYMBOL, pos_type, new_sl)
-            logger.info("Trailing SL SHORT: %.2f", new_sl)
+            bybit.modify_sl(open_sym, pos_type, new_sl)
+            logger.info("Trailing SL SHORT %s: %.6f", open_sym, new_sl)
 
-        # Cierre EOD
         hour = datetime.now(timezone.utc).hour
         if hour >= config.ORB_HOUR_CLOSE:
-            logger.info("Cierre EOD forzado (hora UTC: %d)", hour)
-            bybit.close_position(pos)
-            time.sleep(2)  # esperar a que Bybit registre el PnL realizado
+            logger.info("Cierre EOD forzado %s (hora UTC: %d)", open_sym, hour)
+            bybit.close_position(open_pos)
+            time.sleep(2)
             _handle_closed_trade(balance, "Cierre EOD (20:00 UTC)")
 
         sm.save_state(account, "holding", active_trade, cft)
         return
 
-    # Buscar entrada
-    signal, regime = check_entry(df)
+    # ── Sin posiciones (modo SINGLE): buscar entrada en orden de prioridad ───
+    for sym in config.SYMBOLS:
+        if sym not in dfs:
+            continue
+        df  = dfs[sym]
+        cfg = config.SYMBOL_CONFIGS.get(sym, {})
+        signal, regime = check_entry(df, sym, cfg)
+        if not signal:
+            continue
 
-    if signal and not open_positions:
-        risk_pct = get_risk_pct(regime, dd_pct)
+        curr     = df.iloc[-1]
+        risk_pct = get_risk_pct(regime, dd_pct, cfg)
         sl, tp   = calc_sl_tp(signal, curr["close"], curr["atr"])
         lot      = calc_lot_size(balance, curr["atr"], risk_pct)
         chop_val = curr.get("h4_chop", 0)
         st_dir   = curr.get("h4_st_dir", 0)
 
-        logger.info("SENAL: %s | Regimen: %s (CHOP=%.0f ST=%+d) | Risk=%.1f%%",
-                    signal.upper(), regime, chop_val, st_dir, risk_pct * 100)
+        logger.info("SENAL %s: %s | Regimen: %s (CHOP=%.0f ST=%+d) | Risk=%.1f%%",
+                    sym, signal.upper(), regime, chop_val, st_dir, risk_pct * 100)
 
-        result = bybit.open_order(
-            symbol=config.SYMBOL,
-            order_type=signal,
-            lot=lot,
-            sl=sl,
-            tp=tp,
-            comment=f"BotBTC_{regime[:3].upper()}"
-        )
+        result = bybit.open_order(symbol=sym, order_type=signal, lot=lot, sl=sl, tp=tp,
+                                  comment=f"Bot_{sym[:3]}_{regime[:3].upper()}")
 
         if "error" not in result:
             active_trade = {
+                "symbol":     sym,
                 "type":       signal,
                 "entry":      curr["close"],
                 "sl":         sl,
@@ -317,27 +326,36 @@ def _cycle():
                 "h4_st_dir":  int(st_dir),
                 "entry_time": datetime.now(timezone.utc).isoformat(),
             }
-            logger.info("ORDEN ABIERTA: %s %s  entry=%.2f  sl=%.2f  tp=%.2f  lot=%.4f",
-                        signal.upper(), config.SYMBOL, curr["close"], sl, tp, lot)
+            logger.info("ORDEN ABIERTA: %s %s  entry=%.6f  sl=%.6f  tp=%.6f  lot=%s",
+                        signal.upper(), sym, curr["close"], sl, tp, lot)
             notifier.notify_trade_open(active_trade)
         else:
-            logger.error("Error al abrir orden: %s", result["error"])
-    else:
-        global _last_status_log
-        if time.time() - _last_status_log >= STATUS_LOG_SECS:
-            _last_status_log = time.time()
-            logger.info("Sin senal | RSI=%.1f  MACD=%.1f  ADX=%.1f  CHOP=%.0f  ST=%+d  DD=%.1f%%  equity=$%.2f",
-                        curr.get("rsi", 0), curr.get("macd_hist", 0), curr.get("adx", 0),
-                        curr.get("h4_chop", 0), curr.get("h4_st_dir", 0), dd_pct * 100, equity)
+            logger.error("Error al abrir orden %s: %s", sym, result["error"])
+        sm.save_state(account, signal, active_trade, cft)
+        return   # modo SINGLE: una sola entrada por ciclo
 
-    sm.save_state(account, signal or "no_signal", active_trade, cft)
+    # ── Sin senal en ningun par ──────────────────────────────────────────────
+    global _last_status_log
+    if time.time() - _last_status_log >= STATUS_LOG_SECS:
+        _last_status_log = time.time()
+        parts = []
+        for sym in config.SYMBOLS:
+            if sym in dfs:
+                c = dfs[sym].iloc[-1]
+                parts.append(f"{sym}[RSI={c.get('rsi',0):.0f} ADX={c.get('adx',0):.0f} "
+                             f"CHOP={c.get('h4_chop',0):.0f} ST={int(c.get('h4_st_dir',0)):+d}]")
+        logger.info("Sin senal | %s | DD=%.1f%% equity=$%.2f",
+                    " ".join(parts), dd_pct * 100, equity)
+    sm.save_state(account, "no_signal", active_trade, cft)
 
 
 def _close_all():
     global active_trade
-    for pos in bybit.get_open_positions(config.SYMBOL):
-        bybit.close_position(pos)
-        logger.info("Posicion cerrada forzada: %s size=%.4f", pos.get("type"), pos.get("size", 0))
+    for sym in config.SYMBOLS:
+        for pos in bybit.get_open_positions(sym):
+            bybit.close_position(pos)
+            logger.info("Posicion cerrada forzada %s: %s size=%.6f",
+                        sym, pos.get("type"), pos.get("size", 0))
     active_trade = None
 
 

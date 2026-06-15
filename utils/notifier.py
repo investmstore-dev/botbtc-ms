@@ -54,16 +54,24 @@ def send(text: str) -> bool:
 
 # ── Notificaciones de trades ──────────────────────────────────────────────────
 
+def _fmt_price(p: float) -> str:
+    """Formatea precio: más decimales para activos baratos (DOGE) que caros (BTC)."""
+    if p >= 100:   return f"${p:,.2f}"
+    if p >= 1:     return f"${p:,.4f}"
+    return f"${p:,.6f}"
+
+
 def notify_trade_open(trade: dict):
-    """trade: dict con type, entry, sl, tp, lot, regime, risk_pct."""
+    """trade: dict con symbol, type, entry, sl, tp, lot, regime, risk_pct."""
     emoji = "🟢" if trade["type"] == "long" else "🔴"
+    sym   = trade.get("symbol", "?")
     send(
-        f"{emoji} <b>TRADE ABIERTO — {trade['type'].upper()}</b>\n"
+        f"{emoji} <b>TRADE ABIERTO — {sym} {trade['type'].upper()}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💵 Entrada: <b>${trade['entry']:,.2f}</b>\n"
-        f"🛑 Stop Loss: ${trade['sl']:,.2f}\n"
-        f"🎯 Take Profit: ${trade['tp']:,.2f}\n"
-        f"📦 Lote: {trade['lot']:.4f} BTC\n"
+        f"💵 Entrada: <b>{_fmt_price(trade['entry'])}</b>\n"
+        f"🛑 Stop Loss: {_fmt_price(trade['sl'])}\n"
+        f"🎯 Take Profit: {_fmt_price(trade['tp'])}\n"
+        f"📦 Tamaño: {trade['lot']:g} unidades\n"
         f"📊 Régimen: {trade.get('regime', '?').upper()} "
         f"(riesgo {trade.get('risk_pct', 0) * 100:.1f}%)"
     )
@@ -75,12 +83,13 @@ def notify_trade_close(trade: dict, exit_price: float, pnl: float,
     pnl_pct = pnl / balance * 100 if balance else 0.0
     emoji   = "✅" if pnl >= 0 else "❌"
     word    = "GANANCIA" if pnl >= 0 else "PÉRDIDA"
+    sym     = trade.get("symbol", "?")
     send(
-        f"{emoji} <b>TRADE CERRADO — {word}</b>\n"
+        f"{emoji} <b>TRADE CERRADO — {sym} {word}</b>\n"
         f"━━━━━━━━━━━━━━━━━━\n"
         f"📈 Tipo: {trade.get('type', '?').upper()}\n"
-        f"💵 Entrada: ${trade.get('entry', 0):,.2f}\n"
-        f"🚪 Salida: ${exit_price:,.2f}\n"
+        f"💵 Entrada: {_fmt_price(trade.get('entry', 0))}\n"
+        f"🚪 Salida: {_fmt_price(exit_price)}\n"
         f"💰 Resultado: <b>${pnl:+,.2f} ({pnl_pct:+.2f}%)</b>\n"
         f"📝 Razón: {reason}"
     )
@@ -89,8 +98,8 @@ def notify_trade_close(trade: dict, exit_price: float, pnl: float,
 # ── Reporte diario ────────────────────────────────────────────────────────────
 
 def notify_daily_report(account: dict, cft: dict, trades_today: list,
-                        regime_info: dict | None = None):
-    """Resumen al cierre de sesión (20:00 UTC)."""
+                        regime_by_symbol: dict | None = None):
+    """Resumen al cierre de sesión (20:00 UTC). regime_by_symbol: {sym: {...}}."""
     balance = account.get("balance", 0)
     equity  = account.get("equity", 0)
 
@@ -99,7 +108,7 @@ def notify_daily_report(account: dict, cft: dict, trades_today: list,
     pnl_day = sum(t.get("pnl", 0) for t in trades_today)
 
     lines = [
-        "📋 <b>REPORTE DIARIO — BOT BTC</b>",
+        "📋 <b>REPORTE DIARIO — BOT Mining Store</b>",
         "━━━━━━━━━━━━━━━━━━",
         f"💼 Balance: <b>${balance:,.2f}</b>",
         f"📊 Equity: ${equity:,.2f}",
@@ -115,20 +124,20 @@ def notify_daily_report(account: dict, cft: dict, trades_today: list,
         for t in trades_today:
             e = "✅" if t.get("pnl", 0) >= 0 else "❌"
             lines.append(
-                f"  {e} {t.get('type', '?').upper()} "
-                f"${t.get('entry', 0):,.0f} → ${t.get('exit', 0):,.0f} "
+                f"  {e} {t.get('symbol','?')} {t.get('type', '?').upper()} "
+                f"{_fmt_price(t.get('entry', 0))} → {_fmt_price(t.get('exit', 0))} "
                 f"= ${t.get('pnl', 0):+,.2f}"
             )
     else:
         lines.append("😴 Sin operaciones (sin señal válida)")
 
-    if regime_info:
-        lines += [
-            "",
-            f"🧭 Régimen: {regime_info.get('regime', '?')} "
-            f"(CHOP={regime_info.get('chop', 0):.0f}, "
-            f"ST={'🟢 alcista' if regime_info.get('st_dir', 0) > 0 else '🔴 bajista'})",
-        ]
+    if regime_by_symbol:
+        lines.append("")
+        lines.append("🧭 <b>Régimen por par:</b>")
+        for sym, info in regime_by_symbol.items():
+            st = "🟢 alcista" if info.get("st_dir", 0) > 0 else "🔴 bajista"
+            lines.append(f"  {sym}: {info.get('regime', '?')} "
+                         f"(CHOP={info.get('chop', 0):.0f}, ST={st})")
 
     lines += ["", "🤖 Bot activo — próxima sesión 04:00 UTC"]
     send("\n".join(lines))

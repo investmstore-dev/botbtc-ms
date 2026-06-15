@@ -1,19 +1,23 @@
-# BOT BTC — Mining Store
+# BOT Mining Store — Multi-par
 **Estrategia:** ORB + MACD/RSI + Supertrend H4 + Choppiness Index  
-**Par:** BTCUSD H1 | **Prop Firm:** Crypto Fund Trader (CFT) $10k Challenge
+**Pares:** BTCUSDT + DOGEUSDT H1 (modo SINGLE) | **Prop Firm:** Crypto Fund Trader (CFT) $10k
 
 ---
 
-## Resultados Backtest (Jul 2024 – Jun 2026)
+## Resultados Backtest portafolio (Jul 2024 – Jun 2026)
 
-| Métrica | Resultado |
-|---|---|
-| Retorno 2 años | +36.6% |
-| Max Drawdown | -7.8% |
-| Profit Factor | 1.59 |
-| Win Rate | 44.3% |
-| Short PF | 1.87 |
-| Challenges CFT pasados | 3 (en ~35-40 días cada uno en mercado tendencial) |
+Estrategia operando **BTC + DOGE sobre una cuenta compartida**, máximo 1 posición
+a la vez (modo SINGLE), reglas de CFT aplicadas al equity combinado:
+
+| Métrica | BTC solo | **BTC + DOGE (SINGLE)** |
+|---|---|---|
+| Retorno 2 años | +36.6% | **+78.5%** |
+| Max Drawdown | -7.8% | **-8.0%** |
+| Profit Factor | 1.59 | **1.76** |
+| Challenges CFT pasados | 3 | **6** |
+
+DOGE usa la config-D optimizada (DD-guard agresivo) para no violar el -10% de CFT.
+Ver `model/backtest_portfolio.py` y `model/optimize_doge.py`.
 
 ---
 

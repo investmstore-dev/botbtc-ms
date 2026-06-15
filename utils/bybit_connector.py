@@ -5,6 +5,7 @@ Carga credenciales desde .env
 """
 import hashlib
 import hmac
+import math
 import time
 import os
 import logging
@@ -79,6 +80,49 @@ def _post(path: str, body: dict) -> dict:
     if data.get("retCode") != 0:
         raise RuntimeError(f"Bybit POST {path} error: {data.get('retMsg')} | {data}")
     return data["result"]
+
+
+# ── Precision por instrumento (qty step / tick size) ──────────────────────────
+_INSTRUMENT_CACHE: dict = {}
+
+
+def get_instrument_filters(symbol: str) -> dict:
+    """Retorna {qty_step, min_qty, tick_size} del par. Cacheado por sesion."""
+    if symbol in _INSTRUMENT_CACHE:
+        return _INSTRUMENT_CACHE[symbol]
+    try:
+        result = _get("/v5/market/instruments-info",
+                      {"category": CATEGORY, "symbol": symbol})
+        info = result["list"][0]
+        f = {
+            "qty_step":  float(info["lotSizeFilter"]["qtyStep"]),
+            "min_qty":   float(info["lotSizeFilter"]["minOrderQty"]),
+            "tick_size": float(info["priceFilter"]["tickSize"]),
+        }
+        _INSTRUMENT_CACHE[symbol] = f
+        return f
+    except Exception as e:
+        logger.error("get_instrument_filters error (%s): %s", symbol, e)
+        # Fallback conservador estilo BTC
+        return {"qty_step": 0.001, "min_qty": 0.001, "tick_size": 0.1}
+
+
+def _fmt_step(value: float, step: float) -> str:
+    """Redondea 'value' al multiplo de 'step' y lo formatea como string Bybit."""
+    rounded = round(value / step) * step
+    decimals = max(0, -int(round(math.log10(step)))) if step < 1 else 0
+    return f"{rounded:.{decimals}f}"
+
+
+def round_qty(symbol: str, qty: float) -> str:
+    f = get_instrument_filters(symbol)
+    q = max(qty, f["min_qty"])
+    return _fmt_step(q, f["qty_step"])
+
+
+def round_price(symbol: str, price: float) -> str:
+    f = get_instrument_filters(symbol)
+    return _fmt_step(price, f["tick_size"])
 
 
 # ── Cuenta ────────────────────────────────────────────────────────────────────
@@ -178,23 +222,26 @@ def open_order(symbol: str, order_type: str, lot: float,
     lot: cantidad en BTC (ej: 0.01)
     """
     side = "Buy" if order_type == "long" else "Sell"
+    qty_s = round_qty(symbol, lot)
+    sl_s  = round_price(symbol, sl)
+    tp_s  = round_price(symbol, tp)
     try:
         result = _post("/v5/order/create", {
             "category":    CATEGORY,
             "symbol":      symbol,
             "side":        side,
             "orderType":   "Market",
-            "qty":         str(round(lot, 4)),
-            "stopLoss":    str(round(sl, 2)),
-            "takeProfit":  str(round(tp, 2)),
+            "qty":         qty_s,
+            "stopLoss":    sl_s,
+            "takeProfit":  tp_s,
             "slTriggerBy": "LastPrice",
             "tpTriggerBy": "LastPrice",
             "timeInForce": "IOC",
             "orderLinkId": f"{comment}_{int(time.time())}",
         })
         order_id = result.get("orderId", "")
-        logger.info("Orden abierta: %s %s qty=%.4f sl=%.2f tp=%.2f | id=%s",
-                    side, symbol, lot, sl, tp, order_id)
+        logger.info("Orden abierta: %s %s qty=%s sl=%s tp=%s | id=%s",
+                    side, symbol, qty_s, sl_s, tp_s, order_id)
         return {"ticket": order_id, "side": side}
     except Exception as e:
         logger.error("open_order error: %s", e)
@@ -214,7 +261,7 @@ def modify_sl(symbol: str, position_type: str, new_sl: float) -> bool:
             "category":    CATEGORY,
             "symbol":      symbol,
             "side":        side,
-            "stopLoss":    str(round(new_sl, 2)),
+            "stopLoss":    round_price(symbol, new_sl),
             "slTriggerBy": "LastPrice",
             "positionIdx": 0,   # one-way mode
         })
@@ -245,7 +292,7 @@ def close_position(position: dict) -> bool:
             "symbol":     symbol,
             "side":       close_side,
             "orderType":  "Market",
-            "qty":        str(round(size, 4)),
+            "qty":        round_qty(symbol, size),
             "reduceOnly": True,
             "timeInForce": "IOC",
             "orderLinkId": f"close_{int(time.time())}",
