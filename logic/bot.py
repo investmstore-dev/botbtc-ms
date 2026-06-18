@@ -155,10 +155,21 @@ def _handle_closed_trade(balance: float, reason: str):
 
     symbol = active_trade.get("symbol", config.SYMBOLS[0])
     exit_price, pnl = 0.0, 0.0
-    closed = bybit.get_closed_pnl(symbol, limit=1)
-    if closed:
-        exit_price = closed[0]["exit"]
-        pnl        = closed[0]["pnl"]
+
+    # Fuente primaria: PnL realizado de Bybit (con reintentos por latencia de settle)
+    for _ in range(3):
+        closed = bybit.get_closed_pnl(symbol, limit=1)
+        if closed and closed[0].get("pnl"):
+            exit_price = closed[0]["exit"]
+            pnl        = closed[0]["pnl"]
+            break
+        time.sleep(1)
+
+    # Fallback robusto: PnL = delta del balance de la cuenta desde la entrada
+    if pnl == 0.0 and active_trade.get("balance_at_entry"):
+        pnl = round(balance - active_trade["balance_at_entry"], 2)
+    if exit_price == 0.0:
+        exit_price = bybit.get_ticker(symbol)
 
     trade_record = {**active_trade, "exit": exit_price, "pnl": pnl,
                     "exit_reason": reason}
@@ -278,13 +289,9 @@ def _cycle():
             bybit.modify_sl(open_sym, pos_type, new_sl)
             logger.info("Trailing SL SHORT %s: %.6f", open_sym, new_sl)
 
-        hour = datetime.now(timezone.utc).hour
-        if hour >= config.ORB_HOUR_CLOSE:
-            logger.info("Cierre EOD forzado %s (hora UTC: %d)", open_sym, hour)
-            bybit.close_position(open_pos)
-            time.sleep(2)
-            _handle_closed_trade(balance, "Cierre EOD (20:00 UTC)")
-
+        # MODO OVERNIGHT: no se cierra por fin de sesion. El trade corre hasta
+        # tocar SL o TP (ambos puestos en Bybit server-side). El trailing stop
+        # se sigue ajustando cada ciclo, tambien fuera de la ventana de trading.
         sm.save_state(account, "holding", active_trade, cft)
         return
 
@@ -324,6 +331,7 @@ def _cycle():
                 "risk_pct":   risk_pct,
                 "h4_chop":    round(float(chop_val), 1),
                 "h4_st_dir":  int(st_dir),
+                "balance_at_entry": balance,
                 "entry_time": datetime.now(timezone.utc).isoformat(),
             }
             logger.info("ORDEN ABIERTA: %s %s  entry=%.6f  sl=%.6f  tp=%.6f  lot=%s",
