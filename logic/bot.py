@@ -141,7 +141,7 @@ def _refresh_sentiment():
 
 def _init_account() -> bool:
     """Carga la cuenta activa y construye el broker. Retorna True si quedo listo."""
-    global active_trade, peak_equity, broker, SYMBOLS, USE_SENTIMENT, ACCOUNT
+    global active_trade, peak_equity, broker, SYMBOLS, USE_SENTIMENT, ACCOUNT, INITIAL_BALANCE
 
     ACCOUNT = account_manager.get_active_account()
     if not ACCOUNT:
@@ -160,6 +160,14 @@ def _init_account() -> bool:
         logger.error("No se pudo conectar con el broker. Verificar credenciales.")
         broker = None
         return False
+
+    # Balance inicial REAL de la cuenta (ej. $500 ADN, $10k CFT) — no hardcode.
+    stored = ACCOUNT.get("initial_balance")
+    if stored:
+        INITIAL_BALANCE = stored
+    else:
+        INITIAL_BALANCE = account.get("balance", 10_000)
+        account_manager.set_field(ACCOUNT.get("id", ""), "initial_balance", INITIAL_BALANCE)
 
     logger.info("=" * 60)
     logger.info("  BOT Mining Store | v6 multi-broker")

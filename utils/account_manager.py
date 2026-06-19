@@ -98,6 +98,16 @@ def add_account(account_id: str, cfg: dict) -> tuple[bool, str]:
     return True, f"Cuenta '{account_id}' guardada."
 
 
+def set_field(account_id: str, key: str, value) -> bool:
+    """Actualiza un campo de una cuenta guardada (ej. initial_balance)."""
+    data = load_accounts()
+    if account_id in data["accounts"]:
+        data["accounts"][account_id][key] = value
+        _save(data)
+        return True
+    return False
+
+
 def set_active(account_id: str) -> tuple[bool, str]:
     data = load_accounts()
     if account_id not in data["accounts"]:
