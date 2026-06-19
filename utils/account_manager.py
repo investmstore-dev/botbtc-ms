@@ -18,10 +18,16 @@ ACCOUNTS_FILE = os.path.join(config.DATA_DIR, "accounts.json")
 # Tipos de cuenta permitidos -> broker que los maneja
 ACCOUNT_TYPES = {
     "CFT": {"broker": "bybit", "label": "Crypto Fund Trader (Bybit)",
-            "fields": ["api_key", "api_secret"]},
+            "fields": ["api_key", "api_secret"],
+            "default_symbols": ["BTCUSDT", "DOGEUSDT"]},
     "ADN": {"broker": "mt5",   "label": "ADN Broker (MetaTrader 5)",
-            "fields": ["login", "password", "server"]},
+            "fields": ["login", "password", "server"],
+            "default_symbols": ["BTCUSD"]},
 }
+
+
+def default_symbols(acc_type: str) -> list:
+    return ACCOUNT_TYPES.get(acc_type.upper(), {}).get("default_symbols", [])
 
 
 # ── Persistencia ──────────────────────────────────────────────────────────────
@@ -83,6 +89,8 @@ def add_account(account_id: str, cfg: dict) -> tuple[bool, str]:
     data = load_accounts()
     cfg["type"] = cfg["type"].upper()
     cfg["broker"] = ACCOUNT_TYPES[cfg["type"]]["broker"]
+    if not cfg.get("symbols"):
+        cfg["symbols"] = default_symbols(cfg["type"])
     data["accounts"][account_id] = cfg
     if data.get("active") is None:
         data["active"] = account_id
@@ -103,14 +111,18 @@ def get_active_account() -> dict | None:
     data = load_accounts()
     active = data.get("active")
     if active and active in data["accounts"]:
-        return {"id": active, **data["accounts"][active]}
+        acc = {"id": active, **data["accounts"][active]}
+        if not acc.get("symbols"):
+            acc["symbols"] = default_symbols(acc.get("type", ""))
+        return acc
     # Fallback de migracion: usar .env si hay credenciales Bybit y no hay cuentas
     if not data["accounts"]:
         from utils import bybit_connector as bc
         if bc.API_KEY and bc.API_SECRET:
             return {"id": "env_cft", "type": "CFT", "broker": "bybit",
                     "api_key": bc.API_KEY, "api_secret": bc.API_SECRET,
-                    "demo": bc.IS_DEMO, "name": "CFT (.env)"}
+                    "demo": bc.IS_DEMO, "name": "CFT (.env)",
+                    "symbols": default_symbols("CFT")}
     return None
 
 

@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 import os
 import config
-from utils import bybit_connector as bybit
+from utils import account_manager
 from utils import state_manager as sm
 from utils import notifier
 from logic.strategy import (compute_indicators, check_entry,
@@ -29,6 +29,13 @@ from logic.strategy import (compute_indicators, check_entry,
 INITIAL_BALANCE        = 10_000
 LOOP_INTERVAL          = 60
 SENTIMENT_REFRESH_SECS = 8 * 3600   # refrescar funding + F&G cada 8h
+
+# ── Estado de la cuenta/broker activos (se setean en run()) ───────────────────
+broker        = None    # instancia Broker (BybitBroker / MT5Broker)
+SYMBOLS       = []      # simbolos de la cuenta activa
+USE_SENTIMENT = True    # False si el broker no tiene funding (MT5/ADN)
+ACCOUNT       = None    # dict de la cuenta activa
+
 active_trade           = None      # modo SINGLE: 1 trade a la vez (incluye "symbol")
 peak_equity            = INITIAL_BALANCE
 _last_sentiment_update = 0.0
@@ -42,6 +49,8 @@ _regime_by_symbol      = {}        # ultimo regimen conocido por par (para el re
 def _refresh_sentiment():
     """Descarga funding rate y Fear&Greed si los datos tienen mas de 8h."""
     global _last_sentiment_update
+    if not USE_SENTIMENT:
+        return   # broker sin funding (MT5/ADN): la estrategia opera sin sentimiento
     if time.time() - _last_sentiment_update < SENTIMENT_REFRESH_SECS:
         return
 
@@ -55,7 +64,7 @@ def _refresh_sentiment():
 
         # ── Funding rate POR PAR: ultimas 200 entradas (cubre 66 dias) ───────
         fund_counts = {}
-        for sym in config.SYMBOLS:
+        for sym in SYMBOLS:
             r = requests.get(
                 "https://api.bybit.com/v5/market/funding/history",
                 params={"category": "linear", "symbol": sym,
@@ -111,19 +120,34 @@ def _refresh_sentiment():
 
 
 def run():
-    global active_trade, peak_equity
+    global active_trade, peak_equity, broker, SYMBOLS, USE_SENTIMENT, ACCOUNT
+
+    ACCOUNT = account_manager.get_active_account()
+    if not ACCOUNT:
+        logger.error("No hay cuenta activa configurada. Usa la pantalla de setup del dashboard.")
+        return
+
+    broker = account_manager.get_active_broker()
+    if not broker:
+        logger.error("No se pudo construir el broker de la cuenta activa.")
+        return
+
+    SYMBOLS = ACCOUNT.get("symbols", [])
+    USE_SENTIMENT = broker.has_funding()
 
     logger.info("=" * 60)
-    logger.info("  BOT Mining Store | Crypto Fund Trader v6 multi-par")
-    logger.info("  Estrategia: ORB + Supertrend H4 + Choppiness + Sentimiento")
-    logger.info("  Pares: %s | Modo: %s", ", ".join(config.SYMBOLS), config.RISK_MODE.upper())
-    logger.info("  Broker: Bybit %s", "DEMO" if bybit.IS_DEMO else "LIVE")
+    logger.info("  BOT Mining Store | v6 multi-broker")
+    logger.info("  Cuenta: %s (%s) | Broker: %s %s",
+                ACCOUNT.get("name", ACCOUNT.get("id")), ACCOUNT.get("type"),
+                broker.name.upper(), "DEMO" if broker.is_demo else "LIVE")
+    logger.info("  Pares: %s | Modo: %s | Sentimiento: %s",
+                ", ".join(SYMBOLS), config.RISK_MODE.upper(),
+                "ON" if USE_SENTIMENT else "OFF")
     logger.info("=" * 60)
 
-    # Verificar conexion con Bybit
-    account = bybit.get_account()
+    account = broker.get_account()
     if not account:
-        logger.error("No se pudo conectar con Bybit. Verificar .env y API Key.")
+        logger.error("No se pudo conectar con el broker. Verificar credenciales.")
         return
 
     logger.info("Cuenta: %s  balance=$%.2f  equity=$%.2f",
@@ -153,12 +177,12 @@ def _handle_closed_trade(balance: float, reason: str):
     if not active_trade:
         return
 
-    symbol = active_trade.get("symbol", config.SYMBOLS[0])
+    symbol = active_trade.get("symbol", SYMBOLS[0])
     exit_price, pnl = 0.0, 0.0
 
     # Fuente primaria: PnL realizado de Bybit (con reintentos por latencia de settle)
     for _ in range(3):
-        closed = bybit.get_closed_pnl(symbol, limit=1)
+        closed = broker.get_closed_pnl(symbol, limit=1)
         if closed and closed[0].get("pnl"):
             exit_price = closed[0]["exit"]
             pnl        = closed[0]["pnl"]
@@ -169,7 +193,7 @@ def _handle_closed_trade(balance: float, reason: str):
     if pnl == 0.0 and active_trade.get("balance_at_entry"):
         pnl = round(balance - active_trade["balance_at_entry"], 2)
     if exit_price == 0.0:
-        exit_price = bybit.get_ticker(symbol)
+        exit_price = broker.get_ticker(symbol)
 
     trade_record = {**active_trade, "exit": exit_price, "pnl": pnl,
                     "exit_reason": reason}
@@ -206,7 +230,7 @@ def _maybe_daily_report(account: dict, cft: dict):
 def _cycle():
     global active_trade, peak_equity
 
-    account = bybit.get_account()
+    account = broker.get_account()
     if not account:
         logger.warning("Sin respuesta de Bybit API. Reintentando en el proximo ciclo.")
         return
@@ -246,8 +270,8 @@ def _cycle():
     # Calcular indicadores de cada par y detectar posicion abierta (cualquiera)
     global _regime_by_symbol
     dfs, open_sym, open_pos = {}, None, None
-    for sym in config.SYMBOLS:
-        df = bybit.get_candles(sym, config.TIMEFRAME, count=400)
+    for sym in SYMBOLS:
+        df = broker.get_candles(sym, config.TIMEFRAME, count=400)
         if df is None or len(df) < 150:
             logger.warning("Datos insuficientes %s (%d velas).", sym,
                            len(df) if df is not None else 0)
@@ -262,7 +286,7 @@ def _cycle():
             "chop":   float(curr.get("h4_chop", 0)),
             "st_dir": int(curr.get("h4_st_dir", 0)),
         }
-        positions = bybit.get_open_positions(sym)
+        positions = broker.get_open_positions(sym)
         if positions:
             open_sym, open_pos = sym, positions[0]
 
@@ -283,10 +307,10 @@ def _cycle():
         new_sl     = calc_trailing_sl(pos_type, curr["ema20"], curr["atr"])
         current_sl = open_pos.get("sl", 0)
         if pos_type == "long" and new_sl > current_sl:
-            bybit.modify_sl(open_sym, pos_type, new_sl)
+            broker.modify_sl(open_sym, pos_type, new_sl)
             logger.info("Trailing SL LONG %s: %.6f", open_sym, new_sl)
         elif pos_type == "short" and new_sl < current_sl:
-            bybit.modify_sl(open_sym, pos_type, new_sl)
+            broker.modify_sl(open_sym, pos_type, new_sl)
             logger.info("Trailing SL SHORT %s: %.6f", open_sym, new_sl)
 
         # MODO OVERNIGHT: no se cierra por fin de sesion. El trade corre hasta
@@ -296,12 +320,12 @@ def _cycle():
         return
 
     # ── Sin posiciones (modo SINGLE): buscar entrada en orden de prioridad ───
-    for sym in config.SYMBOLS:
+    for sym in SYMBOLS:
         if sym not in dfs:
             continue
         df  = dfs[sym]
-        cfg = config.SYMBOL_CONFIGS.get(sym, {})
-        signal, regime = check_entry(df, sym, cfg)
+        cfg = config.symbol_config(sym)
+        signal, regime = check_entry(df, sym, cfg, USE_SENTIMENT)
         if not signal:
             continue
 
@@ -315,7 +339,7 @@ def _cycle():
         logger.info("SENAL %s: %s | Regimen: %s (CHOP=%.0f ST=%+d) | Risk=%.1f%%",
                     sym, signal.upper(), regime, chop_val, st_dir, risk_pct * 100)
 
-        result = bybit.open_order(symbol=sym, order_type=signal, lot=lot, sl=sl, tp=tp,
+        result = broker.open_order(symbol=sym, order_type=signal, lot=lot, sl=sl, tp=tp,
                                   comment=f"Bot_{sym[:3]}_{regime[:3].upper()}")
 
         if "error" not in result:
@@ -347,7 +371,7 @@ def _cycle():
     if time.time() - _last_status_log >= STATUS_LOG_SECS:
         _last_status_log = time.time()
         parts = []
-        for sym in config.SYMBOLS:
+        for sym in SYMBOLS:
             if sym in dfs:
                 c = dfs[sym].iloc[-1]
                 parts.append(f"{sym}[RSI={c.get('rsi',0):.0f} ADX={c.get('adx',0):.0f} "
@@ -359,9 +383,9 @@ def _cycle():
 
 def _close_all():
     global active_trade
-    for sym in config.SYMBOLS:
-        for pos in bybit.get_open_positions(sym):
-            bybit.close_position(pos)
+    for sym in SYMBOLS:
+        for pos in broker.get_open_positions(sym):
+            broker.close_position(pos)
             logger.info("Posicion cerrada forzada %s: %s size=%.6f",
                         sym, pos.get("type"), pos.get("size", 0))
     active_trade = None

@@ -33,7 +33,32 @@ SYMBOL_CONFIGS = {
         "dd_hi": 0.05, "dd_hi_risk": 0.003,   # y mas duro (5%)
         "adx_min": 22, "adx_choppy": 28,
     },
+    # AVAXUSDT (Bybit/CFT): config-D, ver model/scan_pairs.py
+    "AVAXUSDT": {
+        "risk_trend":   0.014, "risk_neutral": 0.008, "risk_choppy": 0.004,
+        "dd_lo": 0.03, "dd_lo_risk": 0.006, "dd_hi": 0.05, "dd_hi_risk": 0.003,
+        "adx_min": 22, "adx_choppy": 28,
+    },
+    # BTCUSD (ADN/MT5): BTC-only SIN sentimiento -> DD-guard agresivo + riesgo
+    # reducido (sin diversificacion, hay que proteger mas la cuenta).
+    "BTCUSD": {
+        "risk_trend":   0.012, "risk_neutral": 0.007, "risk_choppy": 0.004,
+        "dd_lo": 0.03, "dd_lo_risk": 0.006, "dd_hi": 0.05, "dd_hi_risk": 0.003,
+        "adx_min": 22, "adx_choppy": 28,
+    },
 }
+
+# Config por defecto si un simbolo no esta en SYMBOL_CONFIGS
+DEFAULT_SYMBOL_CONFIG = {
+    "risk_trend": 0.012, "risk_neutral": 0.007, "risk_choppy": 0.004,
+    "dd_lo": 0.03, "dd_lo_risk": 0.006, "dd_hi": 0.05, "dd_hi_risk": 0.003,
+    "adx_min": 22, "adx_choppy": 28,
+}
+
+
+def symbol_config(symbol: str) -> dict:
+    return SYMBOL_CONFIGS.get(symbol, DEFAULT_SYMBOL_CONFIG)
+
 
 # Defaults (fallback si un par no esta en SYMBOL_CONFIGS)
 ADX_MIN        = 22
