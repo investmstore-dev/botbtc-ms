@@ -26,7 +26,8 @@ ACCOUNT_TYPES = {
     "PERSONAL": {"broker": "bybit", "label": "Personal Bybit (libre / compounding)",
             "fields": ["api_key", "api_secret"],
             "default_symbols": ["BTCUSDT", "DOGEUSDT"],
-            "prop_rules": False, "default_leverage": 10, "max_loss_pct": 0.50},
+            "prop_rules": False, "default_leverage": 10, "max_loss_pct": 0.50,
+            "use_sentiment": False},   # version sin funding/F&G (mas frecuencia/profit)
 }
 
 
@@ -102,6 +103,8 @@ def add_account(account_id: str, cfg: dict) -> tuple[bool, str]:
         cfg.setdefault("leverage", tdef["default_leverage"])
     if "max_loss_pct" in tdef:
         cfg.setdefault("max_loss_pct", tdef["max_loss_pct"])
+    if "use_sentiment" in tdef:
+        cfg.setdefault("use_sentiment", tdef["use_sentiment"])
     data["accounts"][account_id] = cfg
     if data.get("active") is None:
         data["active"] = account_id

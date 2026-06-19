@@ -156,7 +156,8 @@ def _init_account() -> bool:
         return False
 
     SYMBOLS = ACCOUNT.get("symbols", [])
-    USE_SENTIMENT = broker.has_funding()
+    # Sentimiento: override por cuenta; si no se especifica, depende del broker
+    USE_SENTIMENT = ACCOUNT.get("use_sentiment", broker.has_funding())
     PROP_RULES = ACCOUNT.get("prop_rules", True)
     MAX_LOSS_PCT = ACCOUNT.get("max_loss_pct", 0.50)
 
