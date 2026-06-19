@@ -89,11 +89,17 @@ async function api(path, method="GET", body=null){
 function renderFields(){
   const t = document.getElementById("type").value;
   const fields = (TYPES[t]||{}).fields || [];
-  document.getElementById("fields").innerHTML = fields.map(f=>{
+  let html = fields.map(f=>{
     const type = f==="password" ? "password" : (f==="login" ? "number" : "text");
     return `<label>${FIELD_LABELS[f]||f}</label>
             <input id="f_${f}" type="${type}" autocomplete="off">`;
   }).join("");
+  if (t === "ADN"){
+    html += `<label>Ruta terminal MT5 (opcional — solo si falla la autodetección)</label>
+             <input id="f_path" type="text" autocomplete="off"
+                    placeholder="C:\\Program Files\\MetaTrader 5\\terminal64.exe">`;
+  }
+  document.getElementById("fields").innerHTML = html;
 }
 
 function collect(){
@@ -105,6 +111,8 @@ function collect(){
     if (f==="login") v = parseInt(v||"0");
     cfg[f] = v;
   });
+  const pathEl = document.getElementById("f_path");
+  if (pathEl && pathEl.value.trim()) cfg.path = pathEl.value.trim();
   return cfg;
 }
 
