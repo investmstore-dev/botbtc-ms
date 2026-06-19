@@ -36,6 +36,14 @@ IS_DEMO    = os.environ.get("BYBIT_DEMO", "true").lower() == "true"
 BASE_URL   = "https://api-demo.bybit.com" if IS_DEMO else "https://api.bybit.com"
 RECV_WINDOW = "5000"
 
+
+def configure(api_key: str, api_secret: str, demo: bool = True):
+    """Configura las credenciales en runtime (para soporte multi-cuenta)."""
+    global API_KEY, API_SECRET, IS_DEMO, BASE_URL, _INSTRUMENT_CACHE
+    API_KEY, API_SECRET, IS_DEMO = api_key, api_secret, demo
+    BASE_URL = "https://api-demo.bybit.com" if demo else "https://api.bybit.com"
+    _INSTRUMENT_CACHE = {}   # limpiar cache de precision al cambiar de cuenta
+
 SYMBOL     = "BTCUSDT"
 CATEGORY   = "linear"   # futuros perpetuos USDT
 
@@ -246,6 +254,27 @@ def open_order(symbol: str, order_type: str, lot: float,
     except Exception as e:
         logger.error("open_order error: %s", e)
         return {"error": str(e)}
+
+
+# ── Apalancamiento ────────────────────────────────────────────────────────────
+
+def set_leverage(symbol: str, leverage: int) -> bool:
+    """Fija el apalancamiento (buy y sell) del simbolo. Ignora 'no modificado'."""
+    try:
+        _post("/v5/position/set-leverage", {
+            "category":     CATEGORY,
+            "symbol":       symbol,
+            "buyLeverage":  str(leverage),
+            "sellLeverage": str(leverage),
+        })
+        logger.info("Apalancamiento %s = x%d", symbol, leverage)
+        return True
+    except Exception as e:
+        # 110043 = leverage not modified (ya estaba en ese valor) -> ok
+        if "110043" in str(e) or "not modified" in str(e).lower():
+            return True
+        logger.error("set_leverage error (%s): %s", symbol, e)
+        return False
 
 
 # ── Modificar SL (trailing) ───────────────────────────────────────────────────

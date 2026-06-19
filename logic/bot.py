@@ -4,15 +4,17 @@ Estrategia: ORB + MACD/RSI + Supertrend H4 + Choppiness Index | BTCUSD H1
 Cuenta: Crypto Fund Trader | v5b
 Broker: Bybit API directa (sin MT5)
 """
+import os
 import time
 import logging
+import threading
 from datetime import datetime, timezone
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("botbtc.log", encoding="utf-8"),
+        logging.FileHandler(os.environ.get("MS_LOG_FILE", "botbtc.log"), encoding="utf-8"),
         logging.StreamHandler(),
     ]
 )
@@ -20,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 import os
 import config
-from utils import bybit_connector as bybit
+from utils import account_manager
 from utils import state_manager as sm
 from utils import notifier
 from logic.strategy import (compute_indicators, check_entry,
@@ -29,8 +31,35 @@ from logic.strategy import (compute_indicators, check_entry,
 INITIAL_BALANCE        = 10_000
 LOOP_INTERVAL          = 60
 SENTIMENT_REFRESH_SECS = 8 * 3600   # refrescar funding + F&G cada 8h
+
+# ── Estado de la cuenta/broker activos (se setean en run()) ───────────────────
+broker        = None    # instancia Broker (BybitBroker / MT5Broker)
+SYMBOLS       = []      # simbolos de la cuenta activa
+USE_SENTIMENT = True    # False si el broker no tiene funding (MT5/ADN)
+ACCOUNT       = None    # dict de la cuenta activa
+PROP_RULES    = True    # True: reglas prop (stop +8%/-10%). False: libre/compounding
+MAX_LOSS_PCT  = 0.50    # tope de seguridad en modo libre (cierra y para)
+
 active_trade           = None      # modo SINGLE: 1 trade a la vez (incluye "symbol")
 peak_equity            = INITIAL_BALANCE
+
+# Control de hilo (para correr en segundo plano dentro del .exe)
+_stop_event    = threading.Event()
+_restart_event = threading.Event()
+
+
+def stop():
+    """Detiene el loop del bot."""
+    _stop_event.set()
+
+
+def request_restart():
+    """Pide reinicializar la cuenta/broker (tras cambiar la cuenta activa)."""
+    _restart_event.set()
+
+
+def is_running() -> bool:
+    return not _stop_event.is_set() and broker is not None
 _last_sentiment_update = 0.0
 _last_status_log       = 0.0
 STATUS_LOG_SECS        = 30 * 60   # resumen "sin senal" cada 30 min
@@ -42,6 +71,8 @@ _regime_by_symbol      = {}        # ultimo regimen conocido por par (para el re
 def _refresh_sentiment():
     """Descarga funding rate y Fear&Greed si los datos tienen mas de 8h."""
     global _last_sentiment_update
+    if not USE_SENTIMENT:
+        return   # broker sin funding (MT5/ADN): la estrategia opera sin sentimiento
     if time.time() - _last_sentiment_update < SENTIMENT_REFRESH_SECS:
         return
 
@@ -55,7 +86,7 @@ def _refresh_sentiment():
 
         # ── Funding rate POR PAR: ultimas 200 entradas (cubre 66 dias) ───────
         fund_counts = {}
-        for sym in config.SYMBOLS:
+        for sym in SYMBOLS:
             r = requests.get(
                 "https://api.bybit.com/v5/market/funding/history",
                 params={"category": "linear", "symbol": sym,
@@ -110,41 +141,86 @@ def _refresh_sentiment():
         logger.warning("Error actualizando sentimiento: %s", e)
 
 
-def run():
-    global active_trade, peak_equity
+def _init_account() -> bool:
+    """Carga la cuenta activa y construye el broker. Retorna True si quedo listo."""
+    global active_trade, peak_equity, broker, SYMBOLS, USE_SENTIMENT, ACCOUNT, INITIAL_BALANCE
+    global PROP_RULES, MAX_LOSS_PCT
 
-    logger.info("=" * 60)
-    logger.info("  BOT Mining Store | Crypto Fund Trader v6 multi-par")
-    logger.info("  Estrategia: ORB + Supertrend H4 + Choppiness + Sentimiento")
-    logger.info("  Pares: %s | Modo: %s", ", ".join(config.SYMBOLS), config.RISK_MODE.upper())
-    logger.info("  Broker: Bybit %s", "DEMO" if bybit.IS_DEMO else "LIVE")
-    logger.info("=" * 60)
+    ACCOUNT = account_manager.get_active_account()
+    if not ACCOUNT:
+        return False
 
-    # Verificar conexion con Bybit
-    account = bybit.get_account()
+    broker = account_manager.get_active_broker()
+    if not broker:
+        logger.error("No se pudo construir el broker de la cuenta activa.")
+        return False
+
+    SYMBOLS = ACCOUNT.get("symbols", [])
+    # Sentimiento: override por cuenta; si no se especifica, depende del broker
+    USE_SENTIMENT = ACCOUNT.get("use_sentiment", broker.has_funding())
+    PROP_RULES = ACCOUNT.get("prop_rules", True)
+    MAX_LOSS_PCT = ACCOUNT.get("max_loss_pct", 0.50)
+
+    # Apalancamiento (cuentas Bybit personales: x10). No-op en MT5.
+    lev = ACCOUNT.get("leverage")
+    if lev:
+        for s in SYMBOLS:
+            broker.set_leverage(s, int(lev))
+
+    account = broker.get_account()
     if not account:
-        logger.error("No se pudo conectar con Bybit. Verificar .env y API Key.")
-        return
+        logger.error("No se pudo conectar con el broker. Verificar credenciales.")
+        broker = None
+        return False
 
-    logger.info("Cuenta: %s  balance=$%.2f  equity=$%.2f",
-                account.get("login"), account.get("balance", 0), account.get("equity", 0))
+    # Balance inicial REAL de la cuenta (ej. $500 ADN, $10k CFT) — no hardcode.
+    stored = ACCOUNT.get("initial_balance")
+    if stored:
+        INITIAL_BALANCE = stored
+    else:
+        INITIAL_BALANCE = account.get("balance", 10_000)
+        account_manager.set_field(ACCOUNT.get("id", ""), "initial_balance", INITIAL_BALANCE)
 
+    logger.info("=" * 60)
+    logger.info("  BOT Mining Store | v6 multi-broker")
+    logger.info("  Cuenta: %s (%s) | Broker: %s %s",
+                ACCOUNT.get("name", ACCOUNT.get("id")), ACCOUNT.get("type"),
+                broker.name.upper(), "DEMO" if broker.is_demo else "LIVE")
+    logger.info("  Pares: %s | Modo: %s | Sentimiento: %s",
+                ", ".join(SYMBOLS), config.RISK_MODE.upper(),
+                "ON" if USE_SENTIMENT else "OFF")
+    logger.info("  balance=$%.2f  equity=$%.2f",
+                account.get("balance", 0), account.get("equity", 0))
+    logger.info("=" * 60)
+
+    active_trade = None
     peak_equity = account.get("equity", INITIAL_BALANCE)
+    return True
 
-    # Primera carga de sentimiento al arrancar
-    _refresh_sentiment()
 
-    while True:
-        try:
-            _refresh_sentiment()   # no-op si los datos tienen menos de 8h
-            _cycle()
-        except KeyboardInterrupt:
-            logger.info("Bot detenido por el usuario.")
-            break
-        except Exception as e:
-            logger.exception("Error en ciclo: %s", e)
+def run():
+    """Loop principal. Reinicializa la cuenta si se pide restart; espera si no hay
+    cuenta configurada (para que el usuario la cargue en la pantalla de setup)."""
+    while not _stop_event.is_set():
+        _restart_event.clear()
+        if not _init_account():
+            logger.info("Sin cuenta activa valida. Esperando configuracion (setup)...")
+            _stop_event.wait(10)
+            continue
 
-        time.sleep(LOOP_INTERVAL)
+        _refresh_sentiment()
+        while not _stop_event.is_set() and not _restart_event.is_set():
+            try:
+                _refresh_sentiment()   # no-op si los datos tienen menos de 8h
+                _cycle()
+            except Exception as e:
+                logger.exception("Error en ciclo: %s", e)
+            _stop_event.wait(LOOP_INTERVAL)   # sleep interrumpible
+
+        if _restart_event.is_set():
+            logger.info("Reiniciando con la nueva cuenta activa...")
+
+    logger.info("Bot detenido.")
 
 
 def _handle_closed_trade(balance: float, reason: str):
@@ -153,12 +229,12 @@ def _handle_closed_trade(balance: float, reason: str):
     if not active_trade:
         return
 
-    symbol = active_trade.get("symbol", config.SYMBOLS[0])
+    symbol = active_trade.get("symbol", SYMBOLS[0])
     exit_price, pnl = 0.0, 0.0
 
     # Fuente primaria: PnL realizado de Bybit (con reintentos por latencia de settle)
     for _ in range(3):
-        closed = bybit.get_closed_pnl(symbol, limit=1)
+        closed = broker.get_closed_pnl(symbol, limit=1)
         if closed and closed[0].get("pnl"):
             exit_price = closed[0]["exit"]
             pnl        = closed[0]["pnl"]
@@ -169,7 +245,7 @@ def _handle_closed_trade(balance: float, reason: str):
     if pnl == 0.0 and active_trade.get("balance_at_entry"):
         pnl = round(balance - active_trade["balance_at_entry"], 2)
     if exit_price == 0.0:
-        exit_price = bybit.get_ticker(symbol)
+        exit_price = broker.get_ticker(symbol)
 
     trade_record = {**active_trade, "exit": exit_price, "pnl": pnl,
                     "exit_reason": reason}
@@ -206,7 +282,7 @@ def _maybe_daily_report(account: dict, cft: dict):
 def _cycle():
     global active_trade, peak_equity
 
-    account = bybit.get_account()
+    account = broker.get_account()
     if not account:
         logger.warning("Sin respuesta de Bybit API. Reintentando en el proximo ciclo.")
         return
@@ -220,34 +296,46 @@ def _cycle():
     cft    = sm.calc_cft_status(account, INITIAL_BALANCE)
     dd_pct = abs((equity - peak_equity) / peak_equity) if peak_equity > 0 else 0.0
 
-    # Guardas CFT
-    if cft["dd_violated"]:
-        logger.error("DRAWDOWN MAXIMO VIOLADO (%.2f%%). Cerrando posiciones.", cft["max_dd_pct"])
-        notifier.send(f"🚨 <b>ALERTA: DRAWDOWN MÁXIMO VIOLADO</b>\n"
-                      f"DD: {cft['max_dd_pct']:.2f}% — cerrando todas las posiciones.")
-        _close_all()
-        sm.save_state(account, "DD_VIOLATED", active_trade, cft)
-        return
-
-    if cft["daily_dd_violated"]:
-        logger.warning("Drawdown diario violado (%.2f%%). Pausando hoy.", cft["daily_dd_pct"])
-        _close_all()
-        sm.save_state(account, "DAILY_DD_VIOLATED", active_trade, cft)
-        return
-
-    if cft["target_reached"]:
-        logger.info("OBJETIVO ALCANZADO (%.2f%%)! Solicitar fondeo CFT.", cft["profit_pct"])
-        notifier.send(f"🏆 <b>¡OBJETIVO CFT ALCANZADO!</b>\n"
-                      f"Profit: +{cft['profit_pct']:.2f}% — solicitar siguiente fase/fondeo.")
-        _close_all()
-        sm.save_state(account, "TARGET_REACHED", active_trade, cft)
-        return
+    # Guardas segun el modo de la cuenta
+    if PROP_RULES:
+        # Reglas prop firm (CFT / ADN): stop a -10% DD, pausa diaria -5%, objetivo +8%
+        if cft["dd_violated"]:
+            logger.error("DRAWDOWN MAXIMO VIOLADO (%.2f%%). Cerrando posiciones.", cft["max_dd_pct"])
+            notifier.send(f"🚨 <b>ALERTA: DRAWDOWN MÁXIMO VIOLADO</b>\n"
+                          f"DD: {cft['max_dd_pct']:.2f}% — cerrando todas las posiciones.")
+            _close_all()
+            sm.save_state(account, "DD_VIOLATED", active_trade, cft)
+            return
+        if cft["daily_dd_violated"]:
+            logger.warning("Drawdown diario violado (%.2f%%). Pausando hoy.", cft["daily_dd_pct"])
+            _close_all()
+            sm.save_state(account, "DAILY_DD_VIOLATED", active_trade, cft)
+            return
+        if cft["target_reached"]:
+            logger.info("OBJETIVO ALCANZADO (%.2f%%)! Solicitar fondeo CFT.", cft["profit_pct"])
+            notifier.send(f"🏆 <b>¡OBJETIVO CFT ALCANZADO!</b>\n"
+                          f"Profit: +{cft['profit_pct']:.2f}% — solicitar siguiente fase/fondeo.")
+            _close_all()
+            sm.save_state(account, "TARGET_REACHED", active_trade, cft)
+            return
+    else:
+        # Modo libre / compounding: sin objetivo, solo tope de seguridad
+        loss_pct = (balance - INITIAL_BALANCE) / INITIAL_BALANCE if INITIAL_BALANCE > 0 else 0.0
+        if loss_pct <= -MAX_LOSS_PCT:
+            logger.error("TOPE DE PERDIDA personal (%.0f%%) alcanzado. Cerrando y parando.",
+                         MAX_LOSS_PCT * 100)
+            notifier.send(f"🛑 <b>TOPE DE PÉRDIDA ALCANZADO</b>\n"
+                          f"Cuenta personal en {loss_pct*100:.1f}% — bot detenido por seguridad.")
+            _close_all()
+            sm.save_state(account, "MAX_LOSS_STOP", active_trade, cft)
+            _stop_event.set()
+            return
 
     # Calcular indicadores de cada par y detectar posicion abierta (cualquiera)
     global _regime_by_symbol
     dfs, open_sym, open_pos = {}, None, None
-    for sym in config.SYMBOLS:
-        df = bybit.get_candles(sym, config.TIMEFRAME, count=400)
+    for sym in SYMBOLS:
+        df = broker.get_candles(sym, config.TIMEFRAME, count=400)
         if df is None or len(df) < 150:
             logger.warning("Datos insuficientes %s (%d velas).", sym,
                            len(df) if df is not None else 0)
@@ -262,7 +350,7 @@ def _cycle():
             "chop":   float(curr.get("h4_chop", 0)),
             "st_dir": int(curr.get("h4_st_dir", 0)),
         }
-        positions = bybit.get_open_positions(sym)
+        positions = broker.get_open_positions(sym)
         if positions:
             open_sym, open_pos = sym, positions[0]
 
@@ -283,10 +371,10 @@ def _cycle():
         new_sl     = calc_trailing_sl(pos_type, curr["ema20"], curr["atr"])
         current_sl = open_pos.get("sl", 0)
         if pos_type == "long" and new_sl > current_sl:
-            bybit.modify_sl(open_sym, pos_type, new_sl)
+            broker.modify_sl(open_sym, pos_type, new_sl)
             logger.info("Trailing SL LONG %s: %.6f", open_sym, new_sl)
         elif pos_type == "short" and new_sl < current_sl:
-            bybit.modify_sl(open_sym, pos_type, new_sl)
+            broker.modify_sl(open_sym, pos_type, new_sl)
             logger.info("Trailing SL SHORT %s: %.6f", open_sym, new_sl)
 
         # MODO OVERNIGHT: no se cierra por fin de sesion. El trade corre hasta
@@ -296,12 +384,12 @@ def _cycle():
         return
 
     # ── Sin posiciones (modo SINGLE): buscar entrada en orden de prioridad ───
-    for sym in config.SYMBOLS:
+    for sym in SYMBOLS:
         if sym not in dfs:
             continue
         df  = dfs[sym]
-        cfg = config.SYMBOL_CONFIGS.get(sym, {})
-        signal, regime = check_entry(df, sym, cfg)
+        cfg = config.symbol_config(sym)
+        signal, regime = check_entry(df, sym, cfg, USE_SENTIMENT)
         if not signal:
             continue
 
@@ -315,7 +403,7 @@ def _cycle():
         logger.info("SENAL %s: %s | Regimen: %s (CHOP=%.0f ST=%+d) | Risk=%.1f%%",
                     sym, signal.upper(), regime, chop_val, st_dir, risk_pct * 100)
 
-        result = bybit.open_order(symbol=sym, order_type=signal, lot=lot, sl=sl, tp=tp,
+        result = broker.open_order(symbol=sym, order_type=signal, lot=lot, sl=sl, tp=tp,
                                   comment=f"Bot_{sym[:3]}_{regime[:3].upper()}")
 
         if "error" not in result:
@@ -347,7 +435,7 @@ def _cycle():
     if time.time() - _last_status_log >= STATUS_LOG_SECS:
         _last_status_log = time.time()
         parts = []
-        for sym in config.SYMBOLS:
+        for sym in SYMBOLS:
             if sym in dfs:
                 c = dfs[sym].iloc[-1]
                 parts.append(f"{sym}[RSI={c.get('rsi',0):.0f} ADX={c.get('adx',0):.0f} "
@@ -359,9 +447,9 @@ def _cycle():
 
 def _close_all():
     global active_trade
-    for sym in config.SYMBOLS:
-        for pos in bybit.get_open_positions(sym):
-            bybit.close_position(pos)
+    for sym in SYMBOLS:
+        for pos in broker.get_open_positions(sym):
+            broker.close_position(pos)
             logger.info("Posicion cerrada forzada %s: %s size=%.6f",
                         sym, pos.get("type"), pos.get("size", 0))
     active_trade = None

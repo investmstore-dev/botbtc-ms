@@ -189,7 +189,8 @@ def load_sentiment(symbol: str):
 
 # ── Logica de entrada ─────────────────────────────────────────────────────────
 
-def check_entry(df: pd.DataFrame, symbol: str, cfg: dict | None = None):
+def check_entry(df: pd.DataFrame, symbol: str, cfg: dict | None = None,
+                use_sentiment: bool = True):
     """
     Evalua la ultima vela cerrada H1 y retorna ('long'|'short'|None, regime).
 
@@ -269,13 +270,16 @@ def check_entry(df: pd.DataFrame, symbol: str, cfg: dict | None = None):
     orb_dn = prev["close"] >= curr["orb_low"]  and curr["close"] < curr["orb_low"]
 
     # 8. Sentimiento (funding del par + F&G macro)
-    funding, fg = load_sentiment(symbol)
-    if funding is None or fg is None:
-        return None, None   # sin datos de sentimiento, no operar
-
-    long_ok_sent  = (funding >= FUND_LONG_MIN and fg >= FG_LONG_MIN)
-    short_ok_sent = (FUND_SHORT_MIN <= funding <= FUND_SHORT_MAX
-                     and FG_SHORT_MIN <= fg <= FG_SHORT_MAX)
+    # Brokers sin funding (MT5/ADN CFD) operan sin este filtro.
+    if use_sentiment:
+        funding, fg = load_sentiment(symbol)
+        if funding is None or fg is None:
+            return None, None   # sin datos de sentimiento, no operar
+        long_ok_sent  = (funding >= FUND_LONG_MIN and fg >= FG_LONG_MIN)
+        short_ok_sent = (FUND_SHORT_MIN <= funding <= FUND_SHORT_MAX
+                         and FG_SHORT_MIN <= fg <= FG_SHORT_MAX)
+    else:
+        long_ok_sent = short_ok_sent = True
 
     # 9. En choppy/neutral: solo en direccion del Supertrend H4
     st_allows_long  = (regime == "trend") or (st_dir == 1)
