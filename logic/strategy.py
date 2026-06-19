@@ -210,7 +210,7 @@ def check_entry(df: pd.DataFrame, symbol: str, cfg: dict | None = None,
     """
     from config import (ADX_MIN, ADX_CHOPPY_MIN, ATR_VOL_MULT,
                         RSI_LONG_MIN, RSI_LONG_MAX, RSI_SHORT_MIN, RSI_SHORT_MAX,
-                        ORB_HOUR_END, ORB_HOUR_CLOSE, ORB_MIN_RANGE_PCT,
+                        ORB_HOUR_END, ENTRY_HOUR_END, ORB_MIN_RANGE_PCT,
                         CHOP_TREND_MAX, CHOP_CHOPPY_MIN,
                         FUND_LONG_MIN, FUND_SHORT_MIN, FUND_SHORT_MAX,
                         FG_LONG_MIN, FG_SHORT_MIN, FG_SHORT_MAX)
@@ -226,8 +226,8 @@ def check_entry(df: pd.DataFrame, symbol: str, cfg: dict | None = None,
     curr = df.iloc[-1]
     hour = curr.name.hour if hasattr(curr.name, "hour") else int(curr.get("hour", 0))
 
-    # 1. Ventana horaria
-    if not (ORB_HOUR_END <= hour < ORB_HOUR_CLOSE):
+    # 1. Ventana horaria de entrada (ENTRY_HOUR_END configurable por instancia)
+    if not (ORB_HOUR_END <= hour < ENTRY_HOUR_END):
         return None, None
 
     # 2. ORB valido

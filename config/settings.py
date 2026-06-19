@@ -114,8 +114,12 @@ FG_SHORT_MAX   = 70
 # ── Opening Range Breakout (ORB) ──────────────────────────────────────────────
 ORB_HOUR_START    = 0
 ORB_HOUR_END      = 4
-ORB_HOUR_CLOSE    = 20
+ORB_HOUR_CLOSE    = 20   # hora del reporte diario (no afecta entradas en modo overnight)
 ORB_MIN_RANGE_PCT = 0.003
+
+# Ventana de ENTRADA (override por instancia). Default 20 = 04:00-20:00 UTC.
+# Personal extiende a 24 = 04:00-23:59 (mantiene el rango ORB 00:00-04:00).
+ENTRY_HOUR_END    = int(os.environ.get("MS_ENTRY_END", str(ORB_HOUR_CLOSE)))
 
 # ── Gestion de posicion ───────────────────────────────────────────────────────
 ATR_SL_MULT    = 1.2
