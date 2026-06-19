@@ -1,7 +1,12 @@
 __pycache__/
 *.pyc
 data/
-botbtc.log
+data_*/
+*.log
 config_local.py
 .env
 *.csv
+build/
+dist/
+web/dashboard/
+*.spec.bak

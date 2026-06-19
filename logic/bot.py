@@ -4,6 +4,7 @@ Estrategia: ORB + MACD/RSI + Supertrend H4 + Choppiness Index | BTCUSD H1
 Cuenta: Crypto Fund Trader | v5b
 Broker: Bybit API directa (sin MT5)
 """
+import os
 import time
 import logging
 import threading
@@ -13,7 +14,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler("botbtc.log", encoding="utf-8"),
+        logging.FileHandler(os.environ.get("MS_LOG_FILE", "botbtc.log"), encoding="utf-8"),
         logging.StreamHandler(),
     ]
 )

@@ -6,6 +6,19 @@
 # Backtest portafolio 2y (BTC+DOGE, 1 posicion a la vez):
 #   +78.5% | DD -8.0% | PF 1.76 | 6 challenges
 
+import os
+
+# ── Instancia (para correr varios bots en el mismo PC) ────────────────────────
+# MS_DATA_DIR    : carpeta de datos propia (default "data")
+# MS_PORT_OFFSET : desplazamiento de puertos (default 0)
+# MS_LOG_FILE    : archivo de log propio (default "botbtc.log")
+INSTANCE       = os.environ.get("MS_INSTANCE", "")
+PORT_OFFSET    = int(os.environ.get("MS_PORT_OFFSET", "0"))
+PORT_DASHBOARD = 8090 + PORT_OFFSET
+PORT_DATA      = 8091 + PORT_OFFSET
+PORT_CONTROL   = 8092 + PORT_OFFSET
+LOG_FILE       = os.environ.get("MS_LOG_FILE", "botbtc.log")
+
 TIMEFRAME = "H1"
 
 # ── Pares operados (simbolos Bybit linear USDT-perpetuo) ──────────────────────
@@ -117,11 +130,11 @@ CFT_PHASE2_PCT   = 0.05
 CFT_MAX_DD_PCT   = 0.10
 CFT_DAILY_DD_PCT = 0.05
 
-# ── Archivos de estado para el dashboard ─────────────────────────────────────
-DATA_DIR    = "data"
-STATE_FILE  = "data/state.json"
-TRADES_FILE = "data/trades.json"
-EQUITY_FILE = "data/equity.json"
+# ── Archivos de estado para el dashboard (carpeta por instancia) ─────────────
+DATA_DIR    = os.environ.get("MS_DATA_DIR", "data")
+STATE_FILE  = os.path.join(DATA_DIR, "state.json")
+TRADES_FILE = os.path.join(DATA_DIR, "trades.json")
+EQUITY_FILE = os.path.join(DATA_DIR, "equity.json")
 
 # ── Datos de sentimiento ──────────────────────────────────────────────────────
 # Funding rate es POR PAR; Fear & Greed es macro (compartido).

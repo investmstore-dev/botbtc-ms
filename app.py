@@ -29,19 +29,21 @@ def app_dir() -> str:
 os.chdir(app_dir())
 sys.path.insert(0, app_dir())
 
+import config                                                     # noqa: E402
 from utils import data_server, dashboard_server, control_server   # noqa: E402
 from logic import bot                                             # noqa: E402
 
 
 def main():
+    inst = config.INSTANCE or "default"
     print("=" * 56)
-    print("  BOT Mining Store — iniciando servicios...")
+    print(f"  BOT Mining Store — instancia '{inst}' (datos: {config.DATA_DIR})")
     print("=" * 56)
 
     services = [
-        ("Datos      (8091)", data_server.serve),
-        ("Dashboard  (8090)", dashboard_server.serve),
-        ("Setup      (8092)", control_server.serve),
+        (f"Datos      ({config.PORT_DATA})", data_server.serve),
+        (f"Dashboard  ({config.PORT_DASHBOARD})", dashboard_server.serve),
+        (f"Setup      ({config.PORT_CONTROL})", control_server.serve),
         ("Bot        ", bot.run),
     ]
     for name, target in services:
@@ -49,11 +51,12 @@ def main():
         print(f"  [OK] {name}")
 
     time.sleep(2)
-    print("\n  Setup:     http://localhost:8092")
-    print("  Dashboard: http://localhost:8090")
+    setup_url = f"http://localhost:{config.PORT_CONTROL}/"
+    print(f"\n  Setup:     {setup_url}")
+    print(f"  Dashboard: http://localhost:{config.PORT_DASHBOARD}")
     print("  (Ctrl+C para detener)\n")
     try:
-        webbrowser.open("http://localhost:8092/")
+        webbrowser.open(setup_url)
     except Exception:
         pass
 

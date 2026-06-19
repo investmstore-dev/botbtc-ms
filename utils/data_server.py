@@ -3,8 +3,10 @@ import os
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-PORT = 8091
+import config
+
+DATA_DIR = os.path.abspath(config.DATA_DIR)
+PORT = config.PORT_DATA
 
 
 class CORSHandler(SimpleHTTPRequestHandler):

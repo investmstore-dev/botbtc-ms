@@ -8,13 +8,14 @@ import os
 from functools import partial
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 
+import config
 from utils.paths import resource_path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _BUNDLED = resource_path("web", "dashboard")            # copia empaquetada (.exe)
 _SIBLING = os.path.normpath(os.path.join(ROOT, "..", "botbtc-dashboard-ms"))  # dev
 DASHBOARD_DIR = _BUNDLED if os.path.isdir(_BUNDLED) else _SIBLING
-PORT = 8090
+PORT = config.PORT_DASHBOARD
 
 
 class QuietHandler(SimpleHTTPRequestHandler):

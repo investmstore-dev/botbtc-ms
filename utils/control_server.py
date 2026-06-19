@@ -14,12 +14,13 @@ import json
 import os
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
+import config
 from utils import account_manager as am
 from utils.paths import resource_path
 
 SETUP_HTML = resource_path("web", "setup.html")
 
-PORT = 8092
+PORT = config.PORT_CONTROL
 
 
 def _mask(cfg: dict) -> dict:
