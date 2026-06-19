@@ -256,6 +256,27 @@ def open_order(symbol: str, order_type: str, lot: float,
         return {"error": str(e)}
 
 
+# ── Apalancamiento ────────────────────────────────────────────────────────────
+
+def set_leverage(symbol: str, leverage: int) -> bool:
+    """Fija el apalancamiento (buy y sell) del simbolo. Ignora 'no modificado'."""
+    try:
+        _post("/v5/position/set-leverage", {
+            "category":     CATEGORY,
+            "symbol":       symbol,
+            "buyLeverage":  str(leverage),
+            "sellLeverage": str(leverage),
+        })
+        logger.info("Apalancamiento %s = x%d", symbol, leverage)
+        return True
+    except Exception as e:
+        # 110043 = leverage not modified (ya estaba en ese valor) -> ok
+        if "110043" in str(e) or "not modified" in str(e).lower():
+            return True
+        logger.error("set_leverage error (%s): %s", symbol, e)
+        return False
+
+
 # ── Modificar SL (trailing) ───────────────────────────────────────────────────
 
 def modify_sl(symbol: str, position_type: str, new_sl: float) -> bool:

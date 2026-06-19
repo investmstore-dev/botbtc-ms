@@ -58,3 +58,7 @@ class Broker(ABC):
     def has_funding(self) -> bool:
         """True si el broker provee funding rate (crypto perp). MT5/CFD = False."""
         return False
+
+    def set_leverage(self, symbol: str, leverage: int) -> bool:
+        """Fija el apalancamiento del simbolo. No-op por defecto."""
+        return False

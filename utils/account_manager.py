@@ -23,6 +23,10 @@ ACCOUNT_TYPES = {
     "ADN": {"broker": "mt5",   "label": "ADN Broker (MetaTrader 5)",
             "fields": ["login", "password", "server"],
             "default_symbols": ["BTCUSD"]},
+    "PERSONAL": {"broker": "bybit", "label": "Personal Bybit (libre / compounding)",
+            "fields": ["api_key", "api_secret"],
+            "default_symbols": ["BTCUSDT", "DOGEUSDT"],
+            "prop_rules": False, "default_leverage": 10, "max_loss_pct": 0.50},
 }
 
 
@@ -88,9 +92,16 @@ def add_account(account_id: str, cfg: dict) -> tuple[bool, str]:
         return ok, msg
     data = load_accounts()
     cfg["type"] = cfg["type"].upper()
-    cfg["broker"] = ACCOUNT_TYPES[cfg["type"]]["broker"]
+    tdef = ACCOUNT_TYPES[cfg["type"]]
+    cfg["broker"] = tdef["broker"]
     if not cfg.get("symbols"):
         cfg["symbols"] = default_symbols(cfg["type"])
+    # Reglas por tipo (prop vs libre) + apalancamiento + tope de perdida
+    cfg.setdefault("prop_rules", tdef.get("prop_rules", True))
+    if "default_leverage" in tdef:
+        cfg.setdefault("leverage", tdef["default_leverage"])
+    if "max_loss_pct" in tdef:
+        cfg.setdefault("max_loss_pct", tdef["max_loss_pct"])
     data["accounts"][account_id] = cfg
     if data.get("active") is None:
         data["active"] = account_id
@@ -125,8 +136,8 @@ def get_active_account() -> dict | None:
         if not acc.get("symbols"):
             acc["symbols"] = default_symbols(acc.get("type", ""))
         return acc
-    # Fallback de migracion: usar .env si hay credenciales Bybit y no hay cuentas
-    if not data["accounts"]:
+    # Fallback de migracion: usar .env SOLO en la instancia principal (no en ADN/personal)
+    if not data["accounts"] and not config.INSTANCE:
         from utils import bybit_connector as bc
         if bc.API_KEY and bc.API_SECRET:
             return {"id": "env_cft", "type": "CFT", "broker": "bybit",

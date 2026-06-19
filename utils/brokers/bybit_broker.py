@@ -46,5 +46,8 @@ class BybitBroker(Broker):
     def get_closed_pnl(self, symbol, limit=1):
         return bc.get_closed_pnl(symbol, limit)
 
+    def set_leverage(self, symbol, leverage):
+        return bc.set_leverage(symbol, leverage)
+
     def has_funding(self) -> bool:
         return True   # Bybit perp si tiene funding rate

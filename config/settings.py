@@ -136,9 +136,10 @@ STATE_FILE  = os.path.join(DATA_DIR, "state.json")
 TRADES_FILE = os.path.join(DATA_DIR, "trades.json")
 EQUITY_FILE = os.path.join(DATA_DIR, "equity.json")
 
-# ── Datos de sentimiento ──────────────────────────────────────────────────────
-# Funding rate es POR PAR; Fear & Greed es macro (compartido).
+# ── Datos de sentimiento (por instancia, dentro de DATA_DIR) ─────────────────
+# Funding rate es POR PAR; Fear & Greed es macro. Se guardan en la carpeta de la
+# instancia para que varias instancias no se pisen los archivos.
 def funding_csv(symbol: str) -> str:
-    return f"funding_{symbol}.csv"
+    return os.path.join(DATA_DIR, f"funding_{symbol}.csv")
 
-FG_CSV = "fear_greed_index.csv"
+FG_CSV = os.path.join(DATA_DIR, "fear_greed_index.csv")

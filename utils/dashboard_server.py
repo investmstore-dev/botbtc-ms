@@ -19,6 +19,13 @@ PORT = config.PORT_DASHBOARD
 
 
 class QuietHandler(SimpleHTTPRequestHandler):
+    def end_headers(self):
+        # Evita que el navegador cachee index.html (clave para multi-instancia)
+        self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        self.send_header("Pragma", "no-cache")
+        self.send_header("Expires", "0")
+        super().end_headers()
+
     def log_message(self, *args):
         pass
 

@@ -37,6 +37,8 @@ broker        = None    # instancia Broker (BybitBroker / MT5Broker)
 SYMBOLS       = []      # simbolos de la cuenta activa
 USE_SENTIMENT = True    # False si el broker no tiene funding (MT5/ADN)
 ACCOUNT       = None    # dict de la cuenta activa
+PROP_RULES    = True    # True: reglas prop (stop +8%/-10%). False: libre/compounding
+MAX_LOSS_PCT  = 0.50    # tope de seguridad en modo libre (cierra y para)
 
 active_trade           = None      # modo SINGLE: 1 trade a la vez (incluye "symbol")
 peak_equity            = INITIAL_BALANCE
@@ -142,6 +144,7 @@ def _refresh_sentiment():
 def _init_account() -> bool:
     """Carga la cuenta activa y construye el broker. Retorna True si quedo listo."""
     global active_trade, peak_equity, broker, SYMBOLS, USE_SENTIMENT, ACCOUNT, INITIAL_BALANCE
+    global PROP_RULES, MAX_LOSS_PCT
 
     ACCOUNT = account_manager.get_active_account()
     if not ACCOUNT:
@@ -154,6 +157,14 @@ def _init_account() -> bool:
 
     SYMBOLS = ACCOUNT.get("symbols", [])
     USE_SENTIMENT = broker.has_funding()
+    PROP_RULES = ACCOUNT.get("prop_rules", True)
+    MAX_LOSS_PCT = ACCOUNT.get("max_loss_pct", 0.50)
+
+    # Apalancamiento (cuentas Bybit personales: x10). No-op en MT5.
+    lev = ACCOUNT.get("leverage")
+    if lev:
+        for s in SYMBOLS:
+            broker.set_leverage(s, int(lev))
 
     account = broker.get_account()
     if not account:
@@ -284,28 +295,40 @@ def _cycle():
     cft    = sm.calc_cft_status(account, INITIAL_BALANCE)
     dd_pct = abs((equity - peak_equity) / peak_equity) if peak_equity > 0 else 0.0
 
-    # Guardas CFT
-    if cft["dd_violated"]:
-        logger.error("DRAWDOWN MAXIMO VIOLADO (%.2f%%). Cerrando posiciones.", cft["max_dd_pct"])
-        notifier.send(f"🚨 <b>ALERTA: DRAWDOWN MÁXIMO VIOLADO</b>\n"
-                      f"DD: {cft['max_dd_pct']:.2f}% — cerrando todas las posiciones.")
-        _close_all()
-        sm.save_state(account, "DD_VIOLATED", active_trade, cft)
-        return
-
-    if cft["daily_dd_violated"]:
-        logger.warning("Drawdown diario violado (%.2f%%). Pausando hoy.", cft["daily_dd_pct"])
-        _close_all()
-        sm.save_state(account, "DAILY_DD_VIOLATED", active_trade, cft)
-        return
-
-    if cft["target_reached"]:
-        logger.info("OBJETIVO ALCANZADO (%.2f%%)! Solicitar fondeo CFT.", cft["profit_pct"])
-        notifier.send(f"🏆 <b>¡OBJETIVO CFT ALCANZADO!</b>\n"
-                      f"Profit: +{cft['profit_pct']:.2f}% — solicitar siguiente fase/fondeo.")
-        _close_all()
-        sm.save_state(account, "TARGET_REACHED", active_trade, cft)
-        return
+    # Guardas segun el modo de la cuenta
+    if PROP_RULES:
+        # Reglas prop firm (CFT / ADN): stop a -10% DD, pausa diaria -5%, objetivo +8%
+        if cft["dd_violated"]:
+            logger.error("DRAWDOWN MAXIMO VIOLADO (%.2f%%). Cerrando posiciones.", cft["max_dd_pct"])
+            notifier.send(f"🚨 <b>ALERTA: DRAWDOWN MÁXIMO VIOLADO</b>\n"
+                          f"DD: {cft['max_dd_pct']:.2f}% — cerrando todas las posiciones.")
+            _close_all()
+            sm.save_state(account, "DD_VIOLATED", active_trade, cft)
+            return
+        if cft["daily_dd_violated"]:
+            logger.warning("Drawdown diario violado (%.2f%%). Pausando hoy.", cft["daily_dd_pct"])
+            _close_all()
+            sm.save_state(account, "DAILY_DD_VIOLATED", active_trade, cft)
+            return
+        if cft["target_reached"]:
+            logger.info("OBJETIVO ALCANZADO (%.2f%%)! Solicitar fondeo CFT.", cft["profit_pct"])
+            notifier.send(f"🏆 <b>¡OBJETIVO CFT ALCANZADO!</b>\n"
+                          f"Profit: +{cft['profit_pct']:.2f}% — solicitar siguiente fase/fondeo.")
+            _close_all()
+            sm.save_state(account, "TARGET_REACHED", active_trade, cft)
+            return
+    else:
+        # Modo libre / compounding: sin objetivo, solo tope de seguridad
+        loss_pct = (balance - INITIAL_BALANCE) / INITIAL_BALANCE if INITIAL_BALANCE > 0 else 0.0
+        if loss_pct <= -MAX_LOSS_PCT:
+            logger.error("TOPE DE PERDIDA personal (%.0f%%) alcanzado. Cerrando y parando.",
+                         MAX_LOSS_PCT * 100)
+            notifier.send(f"🛑 <b>TOPE DE PÉRDIDA ALCANZADO</b>\n"
+                          f"Cuenta personal en {loss_pct*100:.1f}% — bot detenido por seguridad.")
+            _close_all()
+            sm.save_state(account, "MAX_LOSS_STOP", active_trade, cft)
+            _stop_event.set()
+            return
 
     # Calcular indicadores de cada par y detectar posicion abierta (cualquiera)
     global _regime_by_symbol
