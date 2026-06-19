@@ -6,6 +6,7 @@ Broker: Bybit API directa (sin MT5)
 """
 import time
 import logging
+import threading
 from datetime import datetime, timezone
 
 logging.basicConfig(
@@ -38,6 +39,24 @@ ACCOUNT       = None    # dict de la cuenta activa
 
 active_trade           = None      # modo SINGLE: 1 trade a la vez (incluye "symbol")
 peak_equity            = INITIAL_BALANCE
+
+# Control de hilo (para correr en segundo plano dentro del .exe)
+_stop_event    = threading.Event()
+_restart_event = threading.Event()
+
+
+def stop():
+    """Detiene el loop del bot."""
+    _stop_event.set()
+
+
+def request_restart():
+    """Pide reinicializar la cuenta/broker (tras cambiar la cuenta activa)."""
+    _restart_event.set()
+
+
+def is_running() -> bool:
+    return not _stop_event.is_set() and broker is not None
 _last_sentiment_update = 0.0
 _last_status_log       = 0.0
 STATUS_LOG_SECS        = 30 * 60   # resumen "sin senal" cada 30 min
@@ -119,21 +138,27 @@ def _refresh_sentiment():
         logger.warning("Error actualizando sentimiento: %s", e)
 
 
-def run():
+def _init_account() -> bool:
+    """Carga la cuenta activa y construye el broker. Retorna True si quedo listo."""
     global active_trade, peak_equity, broker, SYMBOLS, USE_SENTIMENT, ACCOUNT
 
     ACCOUNT = account_manager.get_active_account()
     if not ACCOUNT:
-        logger.error("No hay cuenta activa configurada. Usa la pantalla de setup del dashboard.")
-        return
+        return False
 
     broker = account_manager.get_active_broker()
     if not broker:
         logger.error("No se pudo construir el broker de la cuenta activa.")
-        return
+        return False
 
     SYMBOLS = ACCOUNT.get("symbols", [])
     USE_SENTIMENT = broker.has_funding()
+
+    account = broker.get_account()
+    if not account:
+        logger.error("No se pudo conectar con el broker. Verificar credenciales.")
+        broker = None
+        return False
 
     logger.info("=" * 60)
     logger.info("  BOT Mining Store | v6 multi-broker")
@@ -143,32 +168,38 @@ def run():
     logger.info("  Pares: %s | Modo: %s | Sentimiento: %s",
                 ", ".join(SYMBOLS), config.RISK_MODE.upper(),
                 "ON" if USE_SENTIMENT else "OFF")
+    logger.info("  balance=$%.2f  equity=$%.2f",
+                account.get("balance", 0), account.get("equity", 0))
     logger.info("=" * 60)
 
-    account = broker.get_account()
-    if not account:
-        logger.error("No se pudo conectar con el broker. Verificar credenciales.")
-        return
-
-    logger.info("Cuenta: %s  balance=$%.2f  equity=$%.2f",
-                account.get("login"), account.get("balance", 0), account.get("equity", 0))
-
+    active_trade = None
     peak_equity = account.get("equity", INITIAL_BALANCE)
+    return True
 
-    # Primera carga de sentimiento al arrancar
-    _refresh_sentiment()
 
-    while True:
-        try:
-            _refresh_sentiment()   # no-op si los datos tienen menos de 8h
-            _cycle()
-        except KeyboardInterrupt:
-            logger.info("Bot detenido por el usuario.")
-            break
-        except Exception as e:
-            logger.exception("Error en ciclo: %s", e)
+def run():
+    """Loop principal. Reinicializa la cuenta si se pide restart; espera si no hay
+    cuenta configurada (para que el usuario la cargue en la pantalla de setup)."""
+    while not _stop_event.is_set():
+        _restart_event.clear()
+        if not _init_account():
+            logger.info("Sin cuenta activa valida. Esperando configuracion (setup)...")
+            _stop_event.wait(10)
+            continue
 
-        time.sleep(LOOP_INTERVAL)
+        _refresh_sentiment()
+        while not _stop_event.is_set() and not _restart_event.is_set():
+            try:
+                _refresh_sentiment()   # no-op si los datos tienen menos de 8h
+                _cycle()
+            except Exception as e:
+                logger.exception("Error en ciclo: %s", e)
+            _stop_event.wait(LOOP_INTERVAL)   # sleep interrumpible
+
+        if _restart_event.is_set():
+            logger.info("Reiniciando con la nueva cuenta activa...")
+
+    logger.info("Bot detenido.")
 
 
 def _handle_closed_trade(balance: float, reason: str):
