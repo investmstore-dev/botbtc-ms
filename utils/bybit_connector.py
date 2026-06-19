@@ -36,6 +36,14 @@ IS_DEMO    = os.environ.get("BYBIT_DEMO", "true").lower() == "true"
 BASE_URL   = "https://api-demo.bybit.com" if IS_DEMO else "https://api.bybit.com"
 RECV_WINDOW = "5000"
 
+
+def configure(api_key: str, api_secret: str, demo: bool = True):
+    """Configura las credenciales en runtime (para soporte multi-cuenta)."""
+    global API_KEY, API_SECRET, IS_DEMO, BASE_URL, _INSTRUMENT_CACHE
+    API_KEY, API_SECRET, IS_DEMO = api_key, api_secret, demo
+    BASE_URL = "https://api-demo.bybit.com" if demo else "https://api.bybit.com"
+    _INSTRUMENT_CACHE = {}   # limpiar cache de precision al cambiar de cuenta
+
 SYMBOL     = "BTCUSDT"
 CATEGORY   = "linear"   # futuros perpetuos USDT
 
