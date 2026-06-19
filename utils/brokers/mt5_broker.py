@@ -28,19 +28,44 @@ class MT5Broker(Broker):
     _TF = {"H1": "TIMEFRAME_H1", "H4": "TIMEFRAME_H4", "D": "TIMEFRAME_D1",
            "60": "TIMEFRAME_H1", "240": "TIMEFRAME_H4"}
 
-    def __init__(self, login: int, password: str, server: str, demo: bool = False):
+    def __init__(self, login: int, password: str, server: str, demo: bool = False,
+                 path: str | None = None):
         self.login = login
         self.password = password
         self.server = server
         self.is_demo = demo
+        self.path = path   # ruta a terminal64.exe (necesaria si hay varios terminales)
+
+    @staticmethod
+    def _find_terminal(server: str) -> str | None:
+        """Busca un terminal64.exe instalado. Prioriza uno cuyo nombre sugiera ADN."""
+        import glob
+        candidates = []
+        for base in (r"C:\Program Files", r"C:\Program Files (x86)"):
+            candidates += glob.glob(base + r"\*\terminal64.exe")
+        if not candidates:
+            return None
+        # preferir uno que mencione ADN; si no, el "MetaTrader 5" generico
+        for c in candidates:
+            if "adn" in c.lower():
+                return c
+        for c in candidates:
+            if c.lower().rstrip("\\").endswith(r"metatrader 5\terminal64.exe"):
+                return c
+        return candidates[0]
 
     # ── Conexion ──────────────────────────────────────────────────────────────
     def connect(self) -> bool:
         if not _MT5_AVAILABLE:
             logger.error("Paquete MetaTrader5 no disponible (instalar en Windows).")
             return False
-        if not mt5.initialize(login=self.login, password=self.password, server=self.server):
-            logger.error("MT5 initialize fallo: %s", mt5.last_error())
+        path = self.path or self._find_terminal(self.server)
+        kwargs = {"login": self.login, "password": self.password,
+                  "server": self.server, "timeout": 15000}
+        if path:
+            kwargs["path"] = path
+        if not mt5.initialize(**kwargs):
+            logger.error("MT5 initialize fallo (path=%s): %s", path, mt5.last_error())
             return False
         return mt5.account_info() is not None
 

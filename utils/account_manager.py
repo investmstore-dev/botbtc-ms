@@ -135,7 +135,7 @@ def _build_broker(cfg: dict):
     if broker == "mt5":
         from utils.brokers.mt5_broker import MT5Broker
         return MT5Broker(int(cfg["login"]), cfg["password"], cfg["server"],
-                         cfg.get("demo", False))
+                         cfg.get("demo", False), cfg.get("path"))
     raise ValueError(f"Broker desconocido: {broker}")
 
 
