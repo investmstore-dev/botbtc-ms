@@ -7,6 +7,8 @@ set MS_INSTANCE=personal
 set MS_DATA_DIR=data_personal
 set MS_PORT_OFFSET=20
 set MS_LOG_FILE=botpersonal.log
+set MS_ENTRY_END=24
+:: ^ ventana de entrada extendida 04:00-23:59 (sin restriccion de horario de sesion)
 
 echo ============================================================
 echo   Instancia PERSONAL (Bybit x10, libre/compounding)
