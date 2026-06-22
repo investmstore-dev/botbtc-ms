@@ -12,12 +12,13 @@ import os
 # MS_DATA_DIR    : carpeta de datos propia (default "data")
 # MS_PORT_OFFSET : desplazamiento de puertos (default 0)
 # MS_LOG_FILE    : archivo de log propio (default "botbtc.log")
-INSTANCE       = os.environ.get("MS_INSTANCE", "")
-PORT_OFFSET    = int(os.environ.get("MS_PORT_OFFSET", "0"))
+# Nota: 'or' trata variable vacia ("") igual que ausente -> usa el default.
+INSTANCE       = os.environ.get("MS_INSTANCE") or ""
+PORT_OFFSET    = int(os.environ.get("MS_PORT_OFFSET") or "0")
 PORT_DASHBOARD = 8090 + PORT_OFFSET
 PORT_DATA      = 8091 + PORT_OFFSET
 PORT_CONTROL   = 8092 + PORT_OFFSET
-LOG_FILE       = os.environ.get("MS_LOG_FILE", "botbtc.log")
+LOG_FILE       = os.environ.get("MS_LOG_FILE") or "botbtc.log"
 
 TIMEFRAME = "H1"
 
@@ -119,7 +120,7 @@ ORB_MIN_RANGE_PCT = 0.003
 
 # Ventana de ENTRADA (override por instancia). Default 20 = 04:00-20:00 UTC.
 # Personal extiende a 24 = 04:00-23:59 (mantiene el rango ORB 00:00-04:00).
-ENTRY_HOUR_END    = int(os.environ.get("MS_ENTRY_END", str(ORB_HOUR_CLOSE)))
+ENTRY_HOUR_END    = int(os.environ.get("MS_ENTRY_END") or str(ORB_HOUR_CLOSE))
 
 # ── Gestion de posicion ───────────────────────────────────────────────────────
 ATR_SL_MULT    = 1.2
@@ -135,7 +136,7 @@ CFT_MAX_DD_PCT   = 0.10
 CFT_DAILY_DD_PCT = 0.05
 
 # ── Archivos de estado para el dashboard (carpeta por instancia) ─────────────
-DATA_DIR    = os.environ.get("MS_DATA_DIR", "data")
+DATA_DIR    = os.environ.get("MS_DATA_DIR") or "data"
 STATE_FILE  = os.path.join(DATA_DIR, "state.json")
 TRADES_FILE = os.path.join(DATA_DIR, "trades.json")
 EQUITY_FILE = os.path.join(DATA_DIR, "equity.json")

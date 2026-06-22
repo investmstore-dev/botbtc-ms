@@ -43,15 +43,33 @@ def configure(api_key: str, api_secret: str, demo: bool = True):
     API_KEY, API_SECRET, IS_DEMO = api_key, api_secret, demo
     BASE_URL = "https://api-demo.bybit.com" if demo else "https://api.bybit.com"
     _INSTRUMENT_CACHE = {}   # limpiar cache de precision al cambiar de cuenta
+    sync_time()              # ajustar offset de reloj con el servidor
 
 SYMBOL     = "BTCUSDT"
 CATEGORY   = "linear"   # futuros perpetuos USDT
 
 
+# ── Sincronizacion de reloj con el servidor (tolera desfase del PC) ───────────
+_time_offset_ms = 0
+
+
+def sync_time():
+    """Calcula el offset entre el reloj local y el servidor Bybit.
+    Evita errores 10002 cuando el reloj del PC esta desincronizado."""
+    global _time_offset_ms
+    try:
+        r = requests.get(BASE_URL + "/v5/market/time", timeout=10)
+        srv_ms = int(r.json()["result"]["timeNano"]) // 1_000_000
+        _time_offset_ms = srv_ms - int(time.time() * 1000)
+        logger.info("Bybit time offset = %d ms", _time_offset_ms)
+    except Exception as e:
+        logger.warning("sync_time error: %s", e)
+
+
 # ── Firma HMAC-SHA256 ─────────────────────────────────────────────────────────
 
 def _sign(params_str: str) -> tuple[str, str]:
-    ts = str(int(time.time() * 1000))
+    ts = str(int(time.time() * 1000) + _time_offset_ms)
     payload = ts + API_KEY + RECV_WINDOW + params_str
     sig = hmac.new(API_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
     return ts, sig
@@ -69,25 +87,31 @@ def _headers(ts: str, sig: str) -> dict:
 
 def _get(path: str, params: dict) -> dict:
     qs = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
-    ts, sig = _sign(qs)
-    r = requests.get(f"{BASE_URL}{path}?{qs}", headers=_headers(ts, sig), timeout=10)
-    r.raise_for_status()
-    data = r.json()
-    if data.get("retCode") != 0:
-        raise RuntimeError(f"Bybit GET {path} error: {data.get('retMsg')} | {data}")
-    return data["result"]
+    for attempt in range(2):
+        ts, sig = _sign(qs)
+        r = requests.get(f"{BASE_URL}{path}?{qs}", headers=_headers(ts, sig), timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("retCode") == 10002 and attempt == 0:
+            sync_time(); continue   # reloj desincronizado: resync y reintentar
+        if data.get("retCode") != 0:
+            raise RuntimeError(f"Bybit GET {path} error: {data.get('retMsg')} | {data}")
+        return data["result"]
 
 
 def _post(path: str, body: dict) -> dict:
     import json
     body_str = json.dumps(body, separators=(",", ":"))
-    ts, sig = _sign(body_str)
-    r = requests.post(BASE_URL + path, data=body_str, headers=_headers(ts, sig), timeout=10)
-    r.raise_for_status()
-    data = r.json()
-    if data.get("retCode") != 0:
-        raise RuntimeError(f"Bybit POST {path} error: {data.get('retMsg')} | {data}")
-    return data["result"]
+    for attempt in range(2):
+        ts, sig = _sign(body_str)
+        r = requests.post(BASE_URL + path, data=body_str, headers=_headers(ts, sig), timeout=10)
+        r.raise_for_status()
+        data = r.json()
+        if data.get("retCode") == 10002 and attempt == 0:
+            sync_time(); continue
+        if data.get("retCode") != 0:
+            raise RuntimeError(f"Bybit POST {path} error: {data.get('retMsg')} | {data}")
+        return data["result"]
 
 
 # ── Precision por instrumento (qty step / tick size) ──────────────────────────

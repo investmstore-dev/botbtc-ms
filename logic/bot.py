@@ -14,7 +14,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
     handlers=[
-        logging.FileHandler(os.environ.get("MS_LOG_FILE", "botbtc.log"), encoding="utf-8"),
+        logging.FileHandler(os.environ.get("MS_LOG_FILE") or "botbtc.log", encoding="utf-8"),
         logging.StreamHandler(),
     ]
 )

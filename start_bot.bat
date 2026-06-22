@@ -1,33 +1,22 @@
 @echo off
-title BOT BTC Mining Store - Crypto Fund Trader
+title BOT Mining Store - Instancia CFT (Bybit)
 cd /d "%~dp0"
 
+:: Instancia CFT = instancia por defecto (data/, puertos 8090/8091/8092)
+:: (limpia cualquier variable de instancia heredada para no cruzar cuentas)
+set "MS_INSTANCE="
+set "MS_DATA_DIR="
+set "MS_PORT_OFFSET="
+set "MS_LOG_FILE="
+set "MS_ENTRY_END="
+
 echo ============================================================
-echo   BOT BTC Mining Store ^| Crypto Fund Trader v5b
+echo   Instancia CFT (Bybit)  ^|  puertos 8090/8091/8092  ^|  data\
 echo ============================================================
 
-where python >nul 2>&1
-if errorlevel 1 (
-    echo ERROR: Python no encontrado.
-    pause & exit /b 1
-)
-
-:: 1. Bot principal (sin ventana)
-start /b "" pythonw -m logic.bot
-echo [OK] Bot iniciado en segundo plano
-
-:: 2. Servidor de datos para el dashboard (puerto 8091, con CORS)
-start /b "" pythonw -m utils.data_server
-echo [OK] Servidor de datos iniciado en http://localhost:8091
-
-:: 3. Dashboard (puerto 8090)
-start /b "" pythonw -m utils.dashboard_server
-echo [OK] Dashboard iniciado en http://localhost:8090
-
-:: Esperar 2 segundos y abrir el dashboard en el navegador
-timeout /t 2 >nul
+start /b "" pythonw app.py
+timeout /t 3 >nul
 start http://localhost:8090/index.html
-
 echo.
-echo Todo corriendo. Para detener: ejecuta stop_bot.bat
-echo Log del bot: tail_log.bat
+echo Dashboard: http://localhost:8090   Setup: http://localhost:8092
+echo Log: botbtc.log
