@@ -82,6 +82,15 @@ class MT5Broker(Broker):
             "login":      str(info.login),
         }
 
+    def _server_utc_offset_sec(self, symbol) -> int:
+        """Offset (segundos) entre la hora del servidor MT5 y UTC real, redondeado
+        a la hora. Muchos brokers (ADN = UTC+3) reportan velas en hora del servidor."""
+        import time as _t
+        tick = mt5.symbol_info_tick(symbol)
+        if not tick or not tick.time:
+            return 0
+        return round((tick.time - _t.time()) / 3600) * 3600
+
     # ── Datos de mercado ──────────────────────────────────────────────────────
     def get_candles(self, symbol, timeframe, count=400):
         if not _MT5_AVAILABLE:
@@ -92,7 +101,11 @@ class MT5Broker(Broker):
             logger.error("MT5 sin velas para %s: %s", symbol, mt5.last_error())
             return None
         df = pd.DataFrame(rates)
-        df["ts"] = pd.to_datetime(df["time"], unit="s")  # UTC del servidor MT5
+        df["ts"] = pd.to_datetime(df["time"], unit="s")
+        # Convertir de hora del servidor MT5 a UTC real (alinea ORB/horarios con Bybit)
+        off = self._server_utc_offset_sec(symbol)
+        if off:
+            df["ts"] = df["ts"] - pd.Timedelta(seconds=off)
         df.set_index("ts", inplace=True)
         df.rename(columns={"tick_volume": "volume"}, inplace=True)
         return df[["open", "high", "low", "close", "volume"]].astype(float)
